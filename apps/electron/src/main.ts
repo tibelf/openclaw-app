@@ -64,7 +64,6 @@ async function startApp() {
     ];
 
     let pnpmPath = possiblePnpmPaths[0]; // 默认使用 NVM pnpm
-    const env = { ...process.env, OPENCLAW_GATEWAY_TOKEN: gatewayToken };
 
     console.log('[Electron] Running from:', monorepoRoot);
 
@@ -74,10 +73,11 @@ async function startApp() {
       '--port', String(PORT),
       '--bind', 'loopback',
       '--allow-unconfigured',
+      '--token', gatewayToken,
     ], {
       stdio: ['ignore', 'pipe', 'pipe'],
       cwd: monorepoRoot,
-      env,
+      env: process.env,
     });
 
     if (!gatewayProcess.pid) {
