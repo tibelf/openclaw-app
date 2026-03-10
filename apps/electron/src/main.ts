@@ -11,6 +11,7 @@ const PORT = 18789;
 let gatewayProcess: ChildProcess | null = null;
 let win: BrowserWindow | null = null;
 let tray: Tray | null = null;
+let isQuitting = false;
 
 // 等待 Gateway 通过 HTTP 就绪
 async function waitForGateway(maxMs = 15000): Promise<void> {
@@ -35,6 +36,12 @@ async function waitForGateway(maxMs = 15000): Promise<void> {
 }
 
 async function startApp() {
+  // 如果应用正在退出，不要启动新窗口
+  if (isQuitting) {
+    console.log('[Electron] App is quitting, skipping startApp');
+    return;
+  }
+
   try {
     // 生成 Gateway token
     const gatewayToken = crypto.randomBytes(24).toString('hex');
@@ -169,6 +176,7 @@ if (!gotLock) {
 } else {
   // 当尝试启动第二个实例时激活第一个实例的窗口
   app.on('second-instance', () => {
+    console.log('[Electron] Second instance attempted, focusing existing window');
     if (win) {
       if (win.isMinimized()) {
         win.restore();
@@ -180,10 +188,30 @@ if (!gotLock) {
 
   app.on('ready', startApp);
 
-  app.on('before-quit', () => {
-    console.log('[Electron] Terminating Gateway process');
+  app.on('before-quit', async () => {
+    console.log('[Electron] Before quit: terminating Gateway process');
+    isQuitting = true;
+
     if (gatewayProcess && !gatewayProcess.killed) {
-      gatewayProcess.kill('SIGTERM');
+      const gp = gatewayProcess; // 保存引用以避免在闭包中变为 null
+      return new Promise<void>((resolve) => {
+        // 尝试优雅关闭：SIGTERM + 2 秒超时后强制 SIGKILL
+        const killTimer = setTimeout(() => {
+          console.log('[Electron] SIGTERM timeout, forcing SIGKILL');
+          if (!gp.killed) {
+            gp.kill('SIGKILL');
+          }
+          resolve();
+        }, 2000);
+
+        gp.once('exit', () => {
+          clearTimeout(killTimer);
+          console.log('[Electron] Gateway process exited cleanly');
+          resolve();
+        });
+
+        gp.kill('SIGTERM');
+      });
     }
   });
 
@@ -195,7 +223,7 @@ if (!gotLock) {
   });
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
+    if (BrowserWindow.getAllWindows().length === 0 && !isQuitting) {
       void startApp();
     } else {
       win?.show();
