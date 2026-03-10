@@ -1,0 +1,6 @@
+build/
+dist/
+dist-copy/
+node_modules/
+node_modules-copy/
+*.js.map

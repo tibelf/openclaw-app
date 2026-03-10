@@ -52,6 +52,7 @@
   - Core channel code: `src/telegram`, `src/discord`, `src/slack`, `src/signal`, `src/imessage`, `src/web` (WhatsApp web), `src/channels`, `src/routing`
   - Extensions (channel plugins): `extensions/*` (e.g. `extensions/msteams`, `extensions/matrix`, `extensions/zalo`, `extensions/zalouser`, `extensions/voice-call`)
 - When adding channels/extensions/apps/docs, update `.github/labeler.yml` and create matching GitHub labels (use existing channel/extension label colors).
+- Desktop apps: `apps/electron/` (Electron wrapper for macOS + Windows desktop distribution). For architecture, key files, and iteration guidelines, see `apps/electron/AGENTS.md`.
 
 ## Docs Linking (Mintlify)
 

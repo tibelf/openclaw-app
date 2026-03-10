@@ -1,0 +1,20 @@
+{
+  "name": "@openclaw/electron",
+  "version": "2026.3.9",
+  "description": "OpenClaw Desktop Application",
+  "author": "OpenClaw Contributors",
+  "private": true,
+  "main": "dist/main.js",
+  "type": "module",
+  "scripts": {
+    "prebuild": "node scripts/copy-assets.mjs",
+    "dev": "electron .",
+    "build": "npm run prebuild && tsc && electron-builder"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "electron": "^35.0.0",
+    "electron-builder": "^25.0.0",
+    "typescript": "^5.6.2"
+  }
+}

@@ -1,0 +1,33 @@
+appId: ai.openclaw.desktop
+productName: OpenClaw
+directories:
+  output: build
+  buildResources: assets
+
+files:
+  - dist/**
+  - ui/**
+  - package.json
+
+extraResources:
+  - from: ../../dist
+    to: ../Resources/dist
+  - from: ../../dist/control-ui
+    to: ../Resources/control-ui
+
+mac:
+  target:
+    - dmg
+    - zip
+  category: public.app-category.utilities
+
+win:
+  target:
+    - nsis
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: OpenClaw
