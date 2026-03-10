@@ -2,6 +2,7 @@ import { app, BrowserWindow, Tray, Menu, nativeImage } from 'electron';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { spawn, type ChildProcess } from 'child_process';
+import crypto from 'node:crypto';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -31,6 +32,10 @@ async function waitForGateway(maxMs = 15000): Promise<void> {
 
 async function startApp() {
   try {
+    // 生成 Gateway token
+    const gatewayToken = crypto.randomBytes(24).toString('hex');
+    console.log('[Electron] Generated gateway token');
+
     // 1. 启动 Gateway 为 subprocess
     console.log('[Electron] Starting Gateway subprocess...');
 
@@ -48,7 +53,7 @@ async function startApp() {
     ];
 
     let pnpmPath = possiblePnpmPaths[0]; // 默认使用 NVM pnpm
-    const env = { ...process.env };
+    const env = { ...process.env, OPENCLAW_GATEWAY_TOKEN: gatewayToken };
 
     console.log('[Electron] Running from:', monorepoRoot);
 
@@ -101,7 +106,7 @@ async function startApp() {
 
     // 3. 加载 UI - 通过 Gateway HTTP server
     console.log('[Electron] Loading UI from HTTP');
-    await win.loadURL(`http://localhost:${PORT}`);
+    await win.loadURL(`http://localhost:${PORT}/#token=${gatewayToken}`);
 
     // 4. 开发模式打开 DevTools
     if (process.env.NODE_ENV === 'development') {
