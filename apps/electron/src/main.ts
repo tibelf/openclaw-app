@@ -1,8 +1,9 @@
-import { app, BrowserWindow, Tray, Menu, nativeImage } from 'electron';
+import { app, BrowserWindow, Tray, Menu, nativeImage, dialog } from 'electron';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { spawn, type ChildProcess } from 'child_process';
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -55,7 +56,11 @@ async function startApp() {
     const appPath = app.getAppPath();
     const monorepoRoot = path.resolve(appPath, '../../../../../../../..');
 
-    // 尝试找到 pnpm 可执行文件
+    // 尝试找到 node 和 pnpm 可执行文件
+    const possibleNodePaths = [
+      '/Users/tibelf/.nvm/versions/node/v22.12.0/bin/node',
+      process.execPath,
+    ];
     const possiblePnpmPaths = [
       '/Users/tibelf/.nvm/versions/node/v22.12.0/bin/pnpm',
       path.resolve(monorepoRoot, 'node_modules/.bin/pnpm'),
@@ -63,21 +68,51 @@ async function startApp() {
       'pnpm',
     ];
 
-    let pnpmPath = possiblePnpmPaths[0]; // 默认使用 NVM pnpm
+    // 找到第一个存在的 node 和 pnpm
+    let nodePath = possibleNodePaths[0];
+    for (const candidate of possibleNodePaths) {
+      if (fs.existsSync(candidate)) {
+        nodePath = candidate;
+        break;
+      }
+    }
+
+    let pnpmPath = 'pnpm'; // 最终 fallback
+    for (const candidate of possiblePnpmPaths) {
+      if (candidate !== 'pnpm' && fs.existsSync(candidate)) {
+        pnpmPath = candidate;
+        break;
+      }
+    }
+    // 如果没找到，使用 PATH 中的 pnpm
+    if (pnpmPath === 'pnpm') {
+      pnpmPath = possiblePnpmPaths[possiblePnpmPaths.length - 1]!;
+    }
 
     console.log('[Electron] Running from:', monorepoRoot);
+    console.log('[Electron] Using node from:', nodePath);
+    console.log('[Electron] Using pnpm from:', pnpmPath);
 
-    gatewayProcess = spawn(pnpmPath, [
-      'openclaw',
-      'gateway', 'run',
-      '--port', String(PORT),
-      '--bind', 'loopback',
-      '--allow-unconfigured',
-      '--token', gatewayToken,
-    ], {
+    // 从 node 路径推导 bin 目录，用于增强 PATH
+    const nodeBinDir = path.dirname(nodePath);
+    const augmentedPath = [
+      nodeBinDir,
+      '/usr/local/bin',
+      '/opt/homebrew/bin',
+      process.env.PATH || '',
+    ]
+      .filter(Boolean)
+      .join(':');
+
+    console.log('[Electron] Augmented PATH:', augmentedPath);
+
+    // 使用 node 直接运行 pnpm（避免 pnpm 进程管理器的中间层）
+    // 使用 detached: true 创建新的进程组，这样可以一次kill整个进程树
+    gatewayProcess = spawn(nodePath, [pnpmPath, 'openclaw', 'gateway', 'run', '--port', String(PORT), '--bind', 'loopback', '--allow-unconfigured', '--token', gatewayToken], {
       stdio: ['ignore', 'pipe', 'pipe'],
       cwd: monorepoRoot,
-      env: process.env,
+      env: { ...process.env, PATH: augmentedPath },
+      detached: true,  // 创建新的进程组
     });
 
     if (!gatewayProcess.pid) {
@@ -166,6 +201,7 @@ async function startApp() {
     console.log('[Electron] App started successfully');
   } catch (err) {
     console.error('[Electron] Failed to start app:', err);
+    dialog.showErrorBox('OpenClaw 启动失败', `启动错误: ${String(err)}`);
     app.quit();
   }
 }
@@ -190,30 +226,54 @@ if (!gotLock) {
 
   app.on('ready', startApp);
 
-  app.on('before-quit', async () => {
+  app.on('before-quit', (e) => {
     console.log('[Electron] Before quit: terminating Gateway process');
+
+    if (isQuitting && gatewayProcess === null) {
+      // 已经在清理过程中，allow quit
+      console.log('[Electron] Already quitting, allowing quit');
+      return;
+    }
+
     isQuitting = true;
 
     if (gatewayProcess && !gatewayProcess.killed) {
-      const gp = gatewayProcess; // 保存引用以避免在闭包中变为 null
-      return new Promise<void>((resolve) => {
-        // 尝试优雅关闭：SIGTERM + 2 秒超时后强制 SIGKILL
-        const killTimer = setTimeout(() => {
-          console.log('[Electron] SIGTERM timeout, forcing SIGKILL');
-          if (!gp.killed) {
-            gp.kill('SIGKILL');
-          }
-          resolve();
-        }, 2000);
+      e.preventDefault(); // 阻止立即退出
 
-        gp.once('exit', () => {
-          clearTimeout(killTimer);
-          console.log('[Electron] Gateway process exited cleanly');
-          resolve();
-        });
+      const gp = gatewayProcess;
+      const pgid = gp.pid!; // 进程组 ID（因为 detached: true）
+      gatewayProcess = null; // 置 null，防止第二次进入此分支
 
-        gp.kill('SIGTERM');
+      const finish = () => {
+        console.log('[Electron] Gateway cleanup complete, quitting app');
+        app.quit();
+      };
+
+      // 尝试优雅关闭：SIGTERM 到进程组 + 2 秒超时后强制 SIGKILL
+      const killTimer = setTimeout(() => {
+        console.log('[Electron] SIGTERM timeout, forcing SIGKILL to process group');
+        try {
+          // 使用负 PID kill 整个进程组
+          process.kill(-pgid, 'SIGKILL');
+        } catch (err) {
+          console.error('[Electron] Error sending SIGKILL:', err);
+        }
+        finish();
+      }, 2000);
+
+      gp.once('exit', () => {
+        clearTimeout(killTimer);
+        console.log('[Electron] Gateway process exited cleanly');
+        finish();
       });
+
+      // Kill 整个进程组
+      try {
+        process.kill(-pgid, 'SIGTERM');
+      } catch (err) {
+        console.error('[Electron] Error sending SIGTERM:', err);
+        finish();
+      }
     }
   });
 
