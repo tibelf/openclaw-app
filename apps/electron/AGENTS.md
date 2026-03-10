@@ -18,16 +18,16 @@
 
 ```
 Electron Main Process
-  └── spawn(pnpm openclaw gateway run --port 18789 --bind loopback)
+  └── spawn(pnpm openclaw gateway run --port 18789 --bind loopback --token <random-token>)
         └── Gateway 子进程（独立 Node.js 环境）
               ├── HTTP Server
               └── WebSocket Server
 
 BrowserWindow
-  └── loadURL('http://localhost:18789')
+  └── loadURL('http://localhost:18789/#token=<random-token>')
         └── Web UI（Lit Web Components）
               ├── Preload 脚本注入配置
-              └── WebSocket 连接 Gateway
+              └── WebSocket 连接 Gateway（token 验证）
 ```
 
 ### 为什么选择 Subprocess 方案？
@@ -96,23 +96,26 @@ Electron 应用为了支持隐藏高级功能（如 debug、nodes、instances ta
 ### 1. Subprocess 启动逻辑（`src/main.ts`）
 
 ```typescript
-// 构造命令：pnpm openclaw gateway run --port 18789 --bind loopback --allow-unconfigured
+// 构造命令：pnpm openclaw gateway run --port 18789 --bind loopback --allow-unconfigured --token <token>
+const gatewayToken = crypto.randomBytes(24).toString('hex');
 const gatewayProcess = spawn(pnpmPath, [
   'openclaw',
   'gateway', 'run',
   '--port', String(PORT),
   '--bind', 'loopback',
   '--allow-unconfigured',  // 跳过 credential 校验
+  '--token', gatewayToken, // 最高优先级，覆盖配置文件中的 token（防止 config-first token mismatch）
 ], {
   stdio: ['ignore', 'pipe', 'pipe'],  // 捕获 stdout/stderr
   cwd: monorepoRoot,                  // 项目根目录
-  env: { ...process.env },            // 继承环境变量
+  env: process.env,                   // 继承环境变量
 });
 ```
 
 **关键点**：
 - `--bind loopback` 确保 Gateway 只在本地可访问（安全）
 - `--allow-unconfigured` 跳过初始化检查，允许新用户启动应用
+- `--token <token>` 传递随机生成的 token，优先级高于配置文件（`~/.openclaw/openclaw.json`），防止用户曾配置 token 时发生 mismatch
 - Subprocess 有独立的 `stdio`，日志通过 pipe 转发到主进程
 
 ### 2. Gateway 就绪检测（`waitForGateway()`）
@@ -154,9 +157,11 @@ win = new BrowserWindow({
   },
 });
 
-// 加载本地 HTTP 服务的 Web UI
-win.loadURL(`http://localhost:${PORT}/`);
+// 加载本地 HTTP 服务的 Web UI，通过 URL hash 传递 token
+win.loadURL(`http://localhost:${PORT}/#token=${gatewayToken}`);
 ```
+
+**token 注入**：通过 URL hash `#token=<token>` 将随机 token 传递给 Web UI。Web UI 读取后在 WebSocket 握手时携带，与 Gateway 验证匹配。
 
 ### 4. Preload 脚本注入配置（`src/preload.ts`）
 
