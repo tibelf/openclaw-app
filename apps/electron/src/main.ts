@@ -124,10 +124,12 @@ async function startApp() {
       win.webContents.openDevTools();
     }
 
-    // 5. 窗口关闭时隐藏到托盘而不是退出
+    // 5. 窗口关闭时隐藏到托盘（退出过程中不阻止）
     win.on('close', (e) => {
-      e.preventDefault();
-      win?.hide();
+      if (!isQuitting) {
+        e.preventDefault();
+        win?.hide();
+      }
     });
 
     // 6. 托盘常驻
@@ -216,10 +218,7 @@ if (!gotLock) {
   });
 
   app.on('window-all-closed', () => {
-    // On macOS, keep app active in dock even after all windows close
-    if (process.platform !== 'darwin') {
-      app.quit();
-    }
+    app.quit();
   });
 
   app.on('activate', () => {
