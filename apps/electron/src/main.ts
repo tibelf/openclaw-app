@@ -16,6 +16,10 @@ let tray: Tray | null = null;
 async function waitForGateway(maxMs = 15000): Promise<void> {
   const start = Date.now();
   while (Date.now() - start < maxMs) {
+    // 检查子进程是否已意外退出
+    if (gatewayProcess?.exitCode !== null) {
+      throw new Error('Gateway process exited unexpectedly');
+    }
     try {
       const res = await fetch(`http://localhost:${PORT}/`, { method: 'GET' });
       if (res.ok || res.status === 404) {
@@ -157,27 +161,45 @@ async function startApp() {
   }
 }
 
-app.on('ready', startApp);
+// 单实例锁：防止多个应用实例同时运行
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock) {
+  // 已有实例运行，直接退出（macOS 会自动激活已有实例）
+  app.quit();
+} else {
+  // 当尝试启动第二个实例时激活第一个实例的窗口
+  app.on('second-instance', () => {
+    if (win) {
+      if (win.isMinimized()) {
+        win.restore();
+      }
+      win.show();
+      win.focus();
+    }
+  });
 
-app.on('before-quit', () => {
-  console.log('[Electron] Terminating Gateway process');
-  if (gatewayProcess && !gatewayProcess.killed) {
-    gatewayProcess.kill('SIGTERM');
-  }
-});
+  app.on('ready', startApp);
 
-app.on('window-all-closed', () => {
-  // On macOS, keep app active in dock even after all windows close
-  if (process.platform !== 'darwin') {
-    app.quit();
-  }
-});
+  app.on('before-quit', () => {
+    console.log('[Electron] Terminating Gateway process');
+    if (gatewayProcess && !gatewayProcess.killed) {
+      gatewayProcess.kill('SIGTERM');
+    }
+  });
 
-app.on('activate', () => {
-  if (BrowserWindow.getAllWindows().length === 0) {
-    void startApp();
-  } else {
-    win?.show();
-    win?.focus();
-  }
-});
+  app.on('window-all-closed', () => {
+    // On macOS, keep app active in dock even after all windows close
+    if (process.platform !== 'darwin') {
+      app.quit();
+    }
+  });
+
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) {
+      void startApp();
+    } else {
+      win?.show();
+      win?.focus();
+    }
+  });
+}
