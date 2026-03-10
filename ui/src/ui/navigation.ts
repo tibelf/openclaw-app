@@ -44,6 +44,31 @@ const TAB_PATHS: Record<Tab, string> = {
 
 const PATH_TO_TAB = new Map(Object.entries(TAB_PATHS).map(([tab, path]) => [path, tab as Tab]));
 
+function getHiddenTabs(): Set<Tab> {
+  try {
+    const config = (window as unknown as Record<string, unknown>).__OPENCLAW_DESKTOP__;
+    if (
+      typeof config === "object" &&
+      config !== null &&
+      "hiddenTabs" in config &&
+      Array.isArray((config as Record<string, unknown>).hiddenTabs)
+    ) {
+      return new Set((config as Record<string, unknown>).hiddenTabs as Tab[]);
+    }
+  } catch {
+    // non-Electron environment, ignore
+  }
+  return new Set();
+}
+
+export function getVisibleTabGroups() {
+  const hidden = getHiddenTabs();
+  return TAB_GROUPS.map((group) => ({
+    ...group,
+    tabs: [...group.tabs].filter((tab) => !hidden.has(tab)),
+  })).filter((group) => group.tabs.length > 0);
+}
+
 export function normalizeBasePath(basePath: string): string {
   if (!basePath) {
     return "";
