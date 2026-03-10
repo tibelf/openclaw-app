@@ -9,7 +9,8 @@
   "scripts": {
     "prebuild": "node scripts/copy-assets.mjs",
     "dev": "electron .",
-    "build": "npm run prebuild && tsc && electron-builder"
+    "build": "npm run prebuild && tsc && electron-builder",
+    "build:nosign": "npm run prebuild && tsc && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder"
   },
   "dependencies": {},
   "devDependencies": {

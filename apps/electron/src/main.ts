@@ -176,5 +176,8 @@ app.on('window-all-closed', () => {
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) {
     void startApp();
+  } else {
+    win?.show();
+    win?.focus();
   }
 });

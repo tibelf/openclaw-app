@@ -241,6 +241,7 @@
     "deadcode:ts-prune": "pnpm dlx ts-prune src extensions scripts",
     "deadcode:ts-unused": "pnpm dlx ts-unused-exports tsconfig.json --ignoreTestFiles --exitWithCount",
     "desktop:build": "pnpm build && pnpm ui:build && pnpm --dir apps/electron build",
+    "desktop:build:nosign": "pnpm build && pnpm ui:build && pnpm --dir apps/electron build:nosign",
     "desktop:dev": "pnpm ui:build && pnpm --dir apps/electron dev",
     "dev": "node scripts/run-node.mjs",
     "docs:bin": "node scripts/build-docs-list.mjs",
