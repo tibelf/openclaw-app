@@ -6,3 +6,4 @@ node_modules-copy/
 staging-node-modules/
 staging-tmp/
 *.js.map
+config/first-run-defaults.json

@@ -11,6 +11,40 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const PORT = 18789;
+
+// Loading screen shown during startup before Gateway is ready
+const LOADING_HTML = `data:text/html;charset=utf-8,${encodeURIComponent(`<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    display: flex; align-items: center; justify-content: center;
+    flex-direction: column; height: 100vh;
+    background: #0f1117; color: #e2e8f0;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    gap: 20px; user-select: none; -webkit-app-region: drag;
+  }
+  .logo { font-size: 26px; font-weight: 700; letter-spacing: -0.5px; color: #fff; }
+  .spinner {
+    width: 32px; height: 32px;
+    border: 3px solid rgba(255,255,255,0.1);
+    border-top-color: #6366f1;
+    border-radius: 50%;
+    animation: spin 0.9s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #status { font-size: 13px; color: #64748b; min-height: 18px; }
+</style>
+</head>
+<body>
+  <div class="logo">OpenClaw</div>
+  <div class="spinner"></div>
+  <div id="status">正在启动...</div>
+</body>
+</html>`)}`;
+
 let gatewayProcess: ChildProcess | null = null;
 let win: BrowserWindow | null = null;
 let tray: Tray | null = null;
@@ -36,6 +70,15 @@ async function waitForGateway(maxMs = 15000): Promise<void> {
     await new Promise(r => setTimeout(r, 200));
   }
   throw new Error(`Gateway did not start in ${maxMs}ms`);
+}
+
+// Update the status text shown in the loading screen
+function updateLoadingStatus(message: string): void {
+  if (win && !win.isDestroyed()) {
+    void win.webContents.executeJavaScript(
+      `var el = document.getElementById('status'); if (el) el.textContent = ${JSON.stringify(message)};`
+    ).catch(() => {});
+  }
 }
 
 // Helper: find Node executable in system
@@ -123,36 +166,55 @@ async function startApp() {
     return;
   }
 
+  // Show loading window immediately so user knows the app is starting
+  const preloadPath = path.join(__dirname, 'preload.js');
+  win = new BrowserWindow({
+    width: 1280,
+    height: 800,
+    show: false,
+    backgroundColor: '#0f1117',
+    webPreferences: { preload: preloadPath, contextIsolation: true },
+  });
+  await win.loadURL(LOADING_HTML);
+  win.show();
+
   try {
+    updateLoadingStatus('检测应用配置...');
     const configPath = path.join(os.homedir(), '.openclaw', 'openclaw.json');
     const isFirstRun = !fs.existsSync(configPath);
 
     if (isFirstRun) {
       console.log('[Electron] First run detected, performing setup...');
+      updateLoadingStatus('初始化配置，请稍候...');
 
       if (!app.isPackaged) {
         // In dev mode: run full onboarding
         const defaultsPath = path.join(app.getAppPath(), 'config', 'first-run-defaults.json');
-        const defaults = JSON.parse(fs.readFileSync(defaultsPath, 'utf-8'));
+        if (!fs.existsSync(defaultsPath)) {
+          console.log('[Electron] first-run-defaults.json not found, skipping first-run setup');
+          console.log('[Electron] Copy config/first-run-defaults.json.example to config/first-run-defaults.json and fill in your API key');
+        } else {
+          const defaults = JSON.parse(fs.readFileSync(defaultsPath, 'utf-8'));
 
-        const nodePath = findNodePath();
-        const pnpmPath = findPnpmPath();
-        const appPath = app.getAppPath();
-        const monorepoRoot = path.resolve(appPath, '../../../../../../../..');
+          const nodePath = findNodePath();
+          const pnpmPath = findPnpmPath();
+          const appPath = app.getAppPath();
+          const monorepoRoot = path.resolve(appPath, '../../../../../../../..');
 
-        console.log('[Electron] Dev mode: running full onboarding');
-        console.log('[Electron] Using node from:', nodePath);
-        console.log('[Electron] Using pnpm from:', pnpmPath);
+          console.log('[Electron] Dev mode: running full onboarding');
+          console.log('[Electron] Using node from:', nodePath);
+          console.log('[Electron] Using pnpm from:', pnpmPath);
 
-        await runFirstTimeSetup({
-          nodePath,
-          clawCommand: [pnpmPath, 'openclaw'],
-          resourcesPath: process.resourcesPath,
-          monorepoRoot,
-          defaults,
-        });
+          await runFirstTimeSetup({
+            nodePath,
+            clawCommand: [pnpmPath, 'openclaw'],
+            resourcesPath: process.resourcesPath,
+            monorepoRoot,
+            defaults,
+          });
 
-        console.log('[Electron] First-time setup completed');
+          console.log('[Electron] First-time setup completed');
+        }
       } else {
         // Packaged mode: run real onboarding using dist/entry.js
         console.log('[Electron] Packaged mode: running onboarding via dist/entry.js');
@@ -177,6 +239,7 @@ async function startApp() {
     console.log('[Electron] Generated gateway token');
 
     console.log('[Electron] Starting Gateway subprocess...');
+    updateLoadingStatus('启动后台服务...');
 
     const nodePath = findNodePath();
     const nodeBinDir = path.dirname(nodePath);
@@ -237,20 +300,9 @@ async function startApp() {
       console.log(`[Electron] Gateway process exited with code ${code} signal ${signal}`);
     });
 
+    updateLoadingStatus('等待服务就绪...');
     await waitForGateway();
     console.log('[Electron] Gateway started successfully');
-
-    const preloadPath = path.join(__dirname, 'preload.js');
-    console.log('[Electron] Loading preload from:', preloadPath);
-
-    win = new BrowserWindow({
-      width: 1280,
-      height: 800,
-      webPreferences: {
-        preload: preloadPath,
-        contextIsolation: true,
-      },
-    });
 
     console.log('[Electron] Loading UI from HTTP');
     await win.loadURL(`http://localhost:${PORT}/#token=${gatewayToken}`);

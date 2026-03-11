@@ -61,7 +61,8 @@ BrowserWindow
 | `apps/electron/src/preload.ts` | Preload 脚本：向 window 注入配置对象 | `window.__OPENCLAW_DESKTOP__` |
 | `apps/electron/src/gateway.d.ts` | 类型声明，规避 TypeScript 模块解析 | （仅限类型，无运行时代码） |
 | `apps/electron/src/first-run.ts` | 首次运行初始化驱动 | `runFirstTimeSetup()`, onboarding、Skills/Hooks 复制 |
-| `apps/electron/config/first-run-defaults.json` | 首次运行配置模板 | provider、apiKey、model、baseUrl、compatibility |
+| `apps/electron/config/first-run-defaults.json` | 首次运行配置（**gitignored**，本地创建，勿提交）| provider、apiKey、model、baseUrl、compatibility |
+| `apps/electron/config/first-run-defaults.json.example` | 配置模板（已提交到仓库，复制后填入真实值）| 同上 |
 
 ### 打包配置
 
@@ -184,6 +185,34 @@ if (!configExists) {
 
 详见 [配置示例](docs/first-run-config.md)。
 
+### 1.6. 加载界面与启动状态反馈（`main.ts`）
+
+`startApp()` 在做任何初始化之前立即创建 BrowserWindow 并显示内嵌加载页，随初始化进展通过 `updateLoadingStatus()` 更新状态文案，Gateway 就绪后无缝切换到真实 UI。
+
+关键实现：
+- `LOADING_HTML`：内嵌 `data:text/html` 加载页，包含 `#status` div
+- `updateLoadingStatus(message)`：通过 `executeJavaScript` 更新 `#status` 文本内容，窗口已销毁时静默忽略
+- `backgroundColor: '#0f1117'`：与加载页背景色一致，防止切换时闪白
+- 四个阶段文案："检测应用配置..." → "初始化配置，请稍候..." → "启动后台服务..." → "等待服务就绪..."
+
+```typescript
+// 立即创建窗口并加载内嵌加载页
+win = new BrowserWindow({ backgroundColor: '#0f1117', show: false, ... });
+await win.loadURL(LOADING_HTML);
+win.show();
+
+// 初始化阶段更新文案
+updateLoadingStatus('检测应用配置...');
+// ... first-run 逻辑 ...
+updateLoadingStatus('启动后台服务...');
+// ... spawn gateway ...
+updateLoadingStatus('等待服务就绪...');
+await waitForGateway();
+
+// Gateway 就绪后切换到真实 UI
+win.loadURL(`http://localhost:${PORT}/#token=${gatewayToken}`);
+```
+
 ### 2. Gateway 就绪检测（`waitForGateway()`）
 
 ```typescript
@@ -209,21 +238,11 @@ async function waitForGateway(maxMs = 15000): Promise<void> {
 
 ### 3. BrowserWindow 加载（`startApp()` 续）
 
+现行方案：窗口在 `startApp()` 最开始就创建（参见 1.6 节），不等 Gateway 就绪。Gateway 就绪后调用 `win.loadURL(...)` 切换到真实 UI。
+
 ```typescript
-// 等待 Gateway 就绪后，加载 Web UI
+// Gateway 就绪后，直接在已有窗口加载 Web UI
 await waitForGateway();
-
-win = new BrowserWindow({
-  width: 1200,
-  height: 800,
-  webPreferences: {
-    preload: path.join(__dirname, 'preload.js'),  // 注入配置
-    nodeIntegration: false,
-    contextIsolation: true,
-  },
-});
-
-// 加载本地 HTTP 服务的 Web UI，通过 URL hash 传递 token
 win.loadURL(`http://localhost:${PORT}/#token=${gatewayToken}`);
 ```
 
@@ -311,23 +330,14 @@ pnpm desktop:build
 - 添加版本检查，支持大版本升级时重新运行 onboarding（可选）
 - 支持可选的 `--force-onboard` CLI 参数强制重新初始化
 
-### 2. pnpm 路径硬编码
+### 2. pnpm / Node 路径查找（✅ 已修复）
 
-`src/main.ts` 第一项是硬编码路径：
-```typescript
-const possiblePnpmPaths = [
-  '/Users/tibelf/.nvm/versions/node/v22.12.0/bin/pnpm',  // ← 硬编码！
-  path.resolve(monorepoRoot, 'node_modules/.bin/pnpm'),
-  'pnpm',
-];
-```
+`findNodePath()` / `findPnpmPath()` 现已动态查找，不再硬编码个人路径。查找顺序：
 
-**问题**：不同机器上 NVM 路径不同，打包后可能失效。
-
-**待改进**：
-- 使用 `which pnpm` 或 npm script 的 `$npm_execpath` 动态查找
-- 或改用 `process.execPath` + `node -e "require.resolve('pnpm/bin/pnpm.cjs')"`
-- 或在打包时将 `pnpm` 复制到 app 资源中
+1. NVM：`~/.nvm/versions/node/*/bin/{node,pnpm}`（按版本号倒序取最新）
+2. Volta：`~/.volta/bin/{node,pnpm}`
+3. 系统常见路径：`/usr/local/bin`、`/opt/homebrew/bin`
+4. 最终 fallback：`process.execPath`（node）/ `'pnpm'`（依赖 PATH）
 
 ### 2. Gateway 无重启机制
 
@@ -357,7 +367,7 @@ macOS 构建已测试并成功。Windows 部分需要在 Windows 机器上验证
 ## 待完成任务清单
 
 - [ ] **应用图标** — 设计 OpenClaw logo，生成 ICNS（macOS）和 ICO（Windows）
-- [ ] **pnpm 路径动态查找** — 改进 subprocess 启动的可靠性
+- [x] **pnpm 路径动态查找** — `findNodePath()` / `findPnpmPath()` 已实现，支持 NVM/Volta/系统路径
 - [ ] **Gateway 重启菜单** — 在托盘菜单添加重启选项
 - [ ] **日志查看** — 添加窗口显示 Gateway 实时日志
 - [ ] **自动更新** — 集成 electron-updater（可选）
@@ -383,6 +393,15 @@ macOS 构建已测试并成功。Windows 部分需要在 Windows 机器上验证
 ```bash
 # 编译 UI + 启动 Electron（带 DevTools）
 pnpm desktop:dev
+```
+### 开发构建
+
+```bash
+# 完整构建 + 打包
+pnpm desktop:build:nosign
+
+# 输出位置
+ls -lh apps/electron/build/
 ```
 
 ### 生产构建

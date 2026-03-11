@@ -1,9 +1,9 @@
 {
   "ai": {
     "provider": "custom",
-    "apiKey": "",
-    "model": "doubao-seed-2.0-lite",
-    "baseUrl": "https://api.qnaigc.com/v1",
+    "apiKey": "YOUR_API_KEY_HERE",
+    "model": "YOUR_MODEL_ID",
+    "baseUrl": "https://your-api-endpoint/v1",
     "compatibility": "openai"
   },
   "gateway": {
@@ -18,7 +18,7 @@
     "nodeManager": "npm"
   },
   "hooks": {
-    "enabled": ["boot-md"],
+    "enabled": [],
     "enableInternal": true
   }
 }
