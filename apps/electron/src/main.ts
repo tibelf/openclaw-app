@@ -124,7 +124,7 @@ async function startApp() {
   }
 
   try {
-    const configPath = path.join(app.getPath('userData'), 'openclaw.json');
+    const configPath = path.join(os.homedir(), '.openclaw', 'openclaw.json');
     const isFirstRun = !fs.existsSync(configPath);
 
     if (isFirstRun) {
@@ -146,7 +146,7 @@ async function startApp() {
 
         await runFirstTimeSetup({
           nodePath,
-          pnpmPath,
+          clawCommand: [pnpmPath, 'openclaw'],
           resourcesPath: process.resourcesPath,
           monorepoRoot,
           defaults,
@@ -154,29 +154,22 @@ async function startApp() {
 
         console.log('[Electron] First-time setup completed');
       } else {
-        // In packaged mode: create minimal configuration
-        console.log('[Electron] Packaged mode: creating minimal configuration');
-        const configDir = path.dirname(configPath);
-        fs.mkdirSync(configDir, { recursive: true });
-
-        // Load first-run defaults
+        // Packaged mode: run real onboarding using dist/entry.js
+        console.log('[Electron] Packaged mode: running onboarding via dist/entry.js');
+        const nodePath = findNodePath();
+        const entryScript = path.join(process.resourcesPath, 'dist', 'entry.js');
         const defaultsPath = path.join(process.resourcesPath, 'config', 'first-run-defaults.json');
         const defaults = JSON.parse(fs.readFileSync(defaultsPath, 'utf-8'));
 
-        const minimalConfig = {
-          ai: {
-            provider: defaults.ai.provider || 'custom',
-            model: defaults.ai.model || 'gpt-4',
-            baseUrl: defaults.ai.baseUrl,
-            apiKey: process.env.OPENCLAW_BUNDLED_API_KEY || defaults.ai.apiKey,
-          },
-          workspace: {
-            dir: defaults.workspace.dir || path.join(os.homedir(), 'openclaw-workspace'),
-          },
-        };
+        await runFirstTimeSetup({
+          nodePath,
+          clawCommand: [entryScript],
+          resourcesPath: process.resourcesPath,
+          monorepoRoot: process.resourcesPath,
+          defaults,
+        });
 
-        fs.writeFileSync(configPath, JSON.stringify(minimalConfig, null, 2));
-        console.log('[Electron] Minimal configuration created');
+        console.log('[Electron] First-time setup completed');
       }
     }
 

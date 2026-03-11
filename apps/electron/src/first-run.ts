@@ -48,7 +48,7 @@ async function spawnAndAwait(
  */
 export async function runFirstTimeSetup(opts: {
   nodePath: string;
-  pnpmPath: string;
+  clawCommand: string[];
   resourcesPath: string;
   monorepoRoot: string;
   defaults: typeof firstRunDefaults;
@@ -57,7 +57,7 @@ export async function runFirstTimeSetup(opts: {
 
   const {
     nodePath,
-    pnpmPath,
+    clawCommand,
     resourcesPath,
     monorepoRoot,
     defaults,
@@ -84,8 +84,7 @@ export async function runFirstTimeSetup(opts: {
   // 1. Run non-interactive onboarding
   console.log('[FirstRun] Running non-interactive onboarding...');
   const onboardArgs = [
-    pnpmPath,
-    'openclaw',
+    ...clawCommand,
     'onboard',
     '--non-interactive',
     '--accept-risk',
@@ -166,7 +165,7 @@ export async function runFirstTimeSetup(opts: {
     // Ensure hooks directory exists
     await fs.mkdir(hooksDestDir, { recursive: true });
 
-    for (const hookName of defaults.hooks.enabled as string[]) {
+    for (const hookName of defaults.hooks.enabled) {
       const srcPath = path.join(hooksSrcDir, hookName);
       const destPath = path.join(hooksDestDir, hookName);
 

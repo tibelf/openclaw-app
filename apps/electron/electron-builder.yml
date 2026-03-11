@@ -16,6 +16,8 @@ extraResources:
     to: ../Resources/control-ui
   - from: staging-node-modules
     to: ../Resources/node_modules
+  - from: ../../docs/reference/templates
+    to: ../Resources/docs/reference/templates
   - from: config
     to: config
   - from: resources
