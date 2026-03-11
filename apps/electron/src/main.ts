@@ -4,6 +4,7 @@ import { fileURLToPath } from 'url';
 import { spawn, type ChildProcess } from 'child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import { runFirstTimeSetup } from './first-run.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -44,6 +45,63 @@ async function startApp() {
   }
 
   try {
+    // Check for first-time run and perform setup if needed
+    const configPath = path.join(app.getPath('userData'), 'openclaw.json');
+    const isFirstRun = !fs.existsSync(configPath);
+
+    if (isFirstRun) {
+      console.log('[Electron] First run detected, performing setup...');
+      const appPath = app.getAppPath();
+      const monorepoRoot = path.resolve(appPath, '../../../../../../../..');
+
+      // Load defaults
+      const defaultsPath = app.isPackaged
+        ? path.join(process.resourcesPath, 'config', 'first-run-defaults.json')
+        : path.join(appPath, 'config', 'first-run-defaults.json');
+      const defaults = JSON.parse(fs.readFileSync(defaultsPath, 'utf-8'));
+
+      // Find node and pnpm paths (reuse existing logic)
+      const possibleNodePaths = [
+        '/Users/tibelf/.nvm/versions/node/v22.12.0/bin/node',
+        process.execPath,
+      ];
+      const possiblePnpmPaths = [
+        '/Users/tibelf/.nvm/versions/node/v22.12.0/bin/pnpm',
+        path.resolve(monorepoRoot, 'node_modules/.bin/pnpm'),
+        path.resolve(monorepoRoot, 'node_modules/.pnpm/.bin/pnpm'),
+        'pnpm',
+      ];
+
+      let nodePath = possibleNodePaths[0];
+      for (const candidate of possibleNodePaths) {
+        if (fs.existsSync(candidate)) {
+          nodePath = candidate;
+          break;
+        }
+      }
+
+      let pnpmPath = 'pnpm';
+      for (const candidate of possiblePnpmPaths) {
+        if (candidate !== 'pnpm' && fs.existsSync(candidate)) {
+          pnpmPath = candidate;
+          break;
+        }
+      }
+      if (pnpmPath === 'pnpm') {
+        pnpmPath = possiblePnpmPaths[possiblePnpmPaths.length - 1]!;
+      }
+
+      await runFirstTimeSetup({
+        nodePath,
+        pnpmPath,
+        resourcesPath: path.join(appPath, '..', 'resources'),
+        monorepoRoot,
+        defaults,
+      });
+
+      console.log('[Electron] First-time setup completed');
+    }
+
     // 生成 Gateway token
     const gatewayToken = crypto.randomBytes(24).toString('hex');
     console.log('[Electron] Generated gateway token');

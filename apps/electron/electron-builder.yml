@@ -14,16 +14,22 @@ extraResources:
     to: ../Resources/dist
   - from: ../../dist/control-ui
     to: ../Resources/control-ui
+  - from: config
+    to: config
+  - from: resources
+    to: resources
 
 mac:
   target:
     - dmg
     - zip
   category: public.app-category.utilities
+  icon: assets/icon.icns
 
 win:
   target:
     - nsis
+  icon: assets/icon.ico
 
 nsis:
   oneClick: false

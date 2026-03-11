@@ -60,6 +60,7 @@ BrowserWindow
 | `apps/electron/src/main.ts` | Electron Main Process：spawn Gateway + 创建窗口 + 托盘管理 | `PORT=18789`, `waitForGateway()`, `startApp()` |
 | `apps/electron/src/preload.ts` | Preload 脚本：向 window 注入配置对象 | `window.__OPENCLAW_DESKTOP__` |
 | `apps/electron/src/gateway.d.ts` | 类型声明，规避 TypeScript 模块解析 | （仅限类型，无运行时代码） |
+| `apps/electron/FIRST_RUN_CONFIG_EXAMPLES.md` | 首次运行配置示例与故障排除 | 5 个场景配置、环境变量覆盖、CI/CD 集成示例 |
 
 ### 打包配置
 
