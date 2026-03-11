@@ -6,7 +6,7 @@
 
 **目的**：将 OpenClaw Gateway + Web UI 打包为面向消费者的跨平台桌面应用，用户直接下载安装包即可使用，无需安装 Node.js 或运行 CLI 命令。
 
-**版本**：2026.3.9
+**版本**：2026.3.11
 **平台**：macOS（arm64/x64）+ Windows
 **核心设计原则**：最小化对上游代码的改动，完全复用 Gateway 和 Web UI 逻辑。
 
@@ -57,10 +57,11 @@ BrowserWindow
 
 | 文件 | 用途 | 关键变量/函数 |
 |------|------|---------------|
-| `apps/electron/src/main.ts` | Electron Main Process：spawn Gateway + 创建窗口 + 托盘管理 | `PORT=18789`, `waitForGateway()`, `startApp()` |
+| `apps/electron/src/main.ts` | Electron Main Process：spawn Gateway + 创建窗口 + 托盘管理 | `PORT=18789`, `waitForGateway()`, `startApp()`, 首次运行检测 |
 | `apps/electron/src/preload.ts` | Preload 脚本：向 window 注入配置对象 | `window.__OPENCLAW_DESKTOP__` |
 | `apps/electron/src/gateway.d.ts` | 类型声明，规避 TypeScript 模块解析 | （仅限类型，无运行时代码） |
-| `apps/electron/FIRST_RUN_CONFIG_EXAMPLES.md` | 首次运行配置示例与故障排除 | 5 个场景配置、环境变量覆盖、CI/CD 集成示例 |
+| `apps/electron/src/first-run.ts` | 首次运行初始化驱动 | `runFirstTimeSetup()`, onboarding、Skills/Hooks 复制 |
+| `apps/electron/config/first-run-defaults.json` | 首次运行配置模板 | provider、apiKey、model、baseUrl、compatibility |
 
 ### 打包配置
 
@@ -118,6 +119,70 @@ const gatewayProcess = spawn(pnpmPath, [
 - `--allow-unconfigured` 跳过初始化检查，允许新用户启动应用
 - `--token <token>` 传递随机生成的 token，优先级高于配置文件（`~/.openclaw/openclaw.json`），防止用户曾配置 token 时发生 mismatch
 - Subprocess 有独立的 `stdio`，日志通过 pipe 转发到主进程
+
+### 1.5. 首次运行初始化流程（`first-run.ts`）
+
+应用首次启动时自动执行以下初始化步骤，无需用户干预：
+
+```typescript
+// 从 main.ts 调用（首次运行检测）
+if (!configExists) {
+  const defaults = JSON.parse(fs.readFileSync(path.join(resourcesPath, 'config/first-run-defaults.json'), 'utf-8'));
+  await runFirstTimeSetup({
+    nodePath,
+    clawCommand: [pnpmPath, 'openclaw'],  // 或 packaged 模式的 node dist/entry.js
+    resourcesPath,
+    monorepoRoot,
+    defaults,
+  });
+}
+```
+
+**初始化步骤**：
+
+1. **非交互式 Onboarding**
+   - 调用 `pnpm openclaw onboard --non-interactive --accept-risk ...`
+   - 根据 `defaults.ai.provider` 传递相应参数：
+     - `anthropic`: `--anthropic-api-key <key>`
+     - `custom`: `--auth-choice custom-api-key --custom-base-url <url> --custom-model-id <model> --custom-api-key <key> --custom-compatibility <openai|anthropic>`
+     - `openrouter`: `--openrouter-api-key <key>`
+   - 支持环境变量 `OPENCLAW_BUNDLED_API_KEY` 覆盖 apiKey
+
+2. **复制默认 Skills**（如果 `defaults.skills.enabled` 不为空）
+   - 源路径：`resources/default-workspace/skills/` （打包时复制到应用资源）
+   - 目标路径：`~/.openclaw/workspace/skills/`
+
+3. **复制默认 Hooks**（如果 `defaults.hooks.enabled` 不为空）
+   - 源路径：`resources/default-hooks/`
+   - 目标路径：`~/.openclaw/hooks/`
+
+4. **启用内置 Hooks**（如果 `defaults.hooks.enableInternal = true`）
+   - 修改 `~/.openclaw/openclaw.json`，设置 `config.hooks.internal.enabled = true`
+
+**配置示例**（`first-run-defaults.json`）：
+
+```json
+{
+  "ai": {
+    "provider": "custom",              // 或 "anthropic", "openrouter"
+    "apiKey": "sk-xxx",                 // 可通过 OPENCLAW_BUNDLED_API_KEY 覆盖
+    "model": "deepseek-chat",
+    "baseUrl": "https://api.deepseek.com/v1",  // 仅 provider=custom 时生效
+    "compatibility": "openai"           // 或 "anthropic"
+  },
+  "gateway": { "port": 18789, "bind": "loopback" },
+  "workspace": { "dir": "" },           // 为空则用 ~/openclaw-workspace
+  "skills": { "enabled": [], "nodeManager": "npm" },
+  "hooks": { "enabled": [], "enableInternal": true }
+}
+```
+
+**支持的 Provider**：
+- `anthropic`: Anthropic 官方 API
+- `custom`: 第三方 LLM 服务（DeepSeek、自托管 LLM、Anthropic 兼容服务）
+- `openrouter`: OpenRouter 中介服务
+
+详见 [配置示例](docs/first-run-config.md)。
 
 ### 2. Gateway 就绪检测（`waitForGateway()`）
 
@@ -238,7 +303,15 @@ pnpm desktop:build
 
 ## 已知限制与改进机会
 
-### 1. pnpm 路径硬编码
+### 1. First-run 首次运行检测
+
+当前检测首次运行的逻辑是检查 `~/.openclaw/openclaw.json` 是否存在。
+
+**待改进**：
+- 添加版本检查，支持大版本升级时重新运行 onboarding（可选）
+- 支持可选的 `--force-onboard` CLI 参数强制重新初始化
+
+### 2. pnpm 路径硬编码
 
 `src/main.ts` 第一项是硬编码路径：
 ```typescript
@@ -295,7 +368,7 @@ macOS 构建已测试并成功。Windows 部分需要在 Windows 机器上验证
 
 ## 版本信息
 
-- **OpenClaw**：2026.3.9
+- **OpenClaw**：2026.3.11
 - **Electron**：35+（v35 及以上）
 - **Node.js**：22+（与 monorepo 保持一致）
 - **pnpm**：10+（与 monorepo 保持一致）

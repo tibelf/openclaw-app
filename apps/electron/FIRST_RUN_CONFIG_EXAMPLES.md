@@ -1,4 +1,23 @@
-# first-run-defaults.json 使用示例
+# ⚠️ 已弃用 — 请查看 docs/first-run-config.md
+
+本文档已弃用。完整的首次运行配置文档已迁移至：
+
+**[docs/first-run-config.md](docs/first-run-config.md)**
+
+该文档包含：
+- 所有支持的配置场景
+- 完整的字段参考
+- 环境变量覆盖说明
+- 故障排除指南
+- CI/CD 集成示例
+
+---
+
+# 原文档内容（存档）
+
+以下内容仅供参考。建议查看上面链接的最新文档。
+
+## first-run-defaults.json 使用示例
 
 本文档展示如何在不同场景下配置 `first-run-defaults.json`，以支持桌面应用首次启动时的自动初始化。
 

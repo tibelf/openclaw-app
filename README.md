@@ -30,6 +30,15 @@ The wizard guides you step by step through setting up the gateway, workspace, ch
 Works with npm, pnpm, or bun.
 New install? Start here: [Getting started](https://docs.openclaw.ai/start/getting-started)
 
+## Desktop App (macOS / Windows)
+
+Prebuilt installers available: [GitHub Releases](https://github.com/openclaw/openclaw/releases)
+
+- **macOS**: `OpenClaw-YYYY.M.D-arm64.dmg` (Apple Silicon / M1/M2/M3)
+- **Windows**: `OpenClaw Setup YYYY.M.D.exe`
+
+No Node.js required. See [Desktop App Setup](apps/electron/docs/setup.md) for details on installation and configuration.
+
 ## Sponsors
 
 | OpenAI                                                            | Vercel                                                            | Blacksmith                                                                   | Convex                                                                |
