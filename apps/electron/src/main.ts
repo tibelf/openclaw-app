@@ -1,5 +1,6 @@
 import { app, BrowserWindow, Tray, Menu, nativeImage, dialog } from 'electron';
 import path from 'path';
+import os from 'node:os';
 import { fileURLToPath } from 'url';
 import { spawn, type ChildProcess } from 'child_process';
 import crypto from 'node:crypto';
@@ -37,141 +38,180 @@ async function waitForGateway(maxMs = 15000): Promise<void> {
   throw new Error(`Gateway did not start in ${maxMs}ms`);
 }
 
+// Helper: find Node executable in system
+function findNodePath(): string {
+  const candidates = [
+    '/usr/local/bin/node',
+    '/opt/homebrew/bin/node',
+    '/opt/homebrew/opt/node@22/bin/node',
+  ];
+
+  // Try NVM: ~/.nvm/versions/node/*/bin/node (latest first)
+  try {
+    const nvmBase = path.join(os.homedir(), '.nvm', 'versions', 'node');
+    if (fs.existsSync(nvmBase)) {
+      const versions = fs.readdirSync(nvmBase).toSorted().toReversed();
+      for (const version of versions) {
+        const nvmNode = path.join(nvmBase, version, 'bin', 'node');
+        if (fs.existsSync(nvmNode)) {
+          return nvmNode;
+        }
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  // Try Volta
+  const voltaNode = path.join(os.homedir(), '.volta', 'bin', 'node');
+  if (fs.existsSync(voltaNode)) {
+    return voltaNode;
+  }
+
+  for (const cand of candidates) {
+    if (fs.existsSync(cand)) {
+      return cand;
+    }
+  }
+
+  // fallback
+  return process.execPath;
+}
+
+// Helper: find pnpm executable
+function findPnpmPath(): string {
+  const candidates = [
+    '/usr/local/bin/pnpm',
+    '/opt/homebrew/bin/pnpm',
+  ];
+
+  // Try NVM
+  try {
+    const nvmBase = path.join(os.homedir(), '.nvm', 'versions', 'node');
+    if (fs.existsSync(nvmBase)) {
+      const versions = fs.readdirSync(nvmBase).toSorted().toReversed();
+      for (const version of versions) {
+        const nvmPnpm = path.join(nvmBase, version, 'bin', 'pnpm');
+        if (fs.existsSync(nvmPnpm)) {
+          return nvmPnpm;
+        }
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  // Try Volta
+  const voltaPnpm = path.join(os.homedir(), '.volta', 'bin', 'pnpm');
+  if (fs.existsSync(voltaPnpm)) {
+    return voltaPnpm;
+  }
+
+  for (const cand of candidates) {
+    if (fs.existsSync(cand)) {
+      return cand;
+    }
+  }
+
+  // fallback: rely on PATH
+  return 'pnpm';
+}
+
 async function startApp() {
-  // 如果应用正在退出，不要启动新窗口
   if (isQuitting) {
     console.log('[Electron] App is quitting, skipping startApp');
     return;
   }
 
   try {
-    // Check for first-time run and perform setup if needed
     const configPath = path.join(app.getPath('userData'), 'openclaw.json');
     const isFirstRun = !fs.existsSync(configPath);
 
     if (isFirstRun) {
       console.log('[Electron] First run detected, performing setup...');
-      const appPath = app.getAppPath();
-      const monorepoRoot = path.resolve(appPath, '../../../../../../../..');
 
-      // Load defaults
-      const defaultsPath = app.isPackaged
-        ? path.join(process.resourcesPath, 'config', 'first-run-defaults.json')
-        : path.join(appPath, 'config', 'first-run-defaults.json');
-      const defaults = JSON.parse(fs.readFileSync(defaultsPath, 'utf-8'));
+      if (!app.isPackaged) {
+        // In dev mode: run full onboarding
+        const defaultsPath = path.join(app.getAppPath(), 'config', 'first-run-defaults.json');
+        const defaults = JSON.parse(fs.readFileSync(defaultsPath, 'utf-8'));
 
-      // Find node and pnpm paths (reuse existing logic)
-      const possibleNodePaths = [
-        '/Users/tibelf/.nvm/versions/node/v22.12.0/bin/node',
-        process.execPath,
-      ];
-      const possiblePnpmPaths = [
-        '/Users/tibelf/.nvm/versions/node/v22.12.0/bin/pnpm',
-        path.resolve(monorepoRoot, 'node_modules/.bin/pnpm'),
-        path.resolve(monorepoRoot, 'node_modules/.pnpm/.bin/pnpm'),
-        'pnpm',
-      ];
+        const nodePath = findNodePath();
+        const pnpmPath = findPnpmPath();
+        const appPath = app.getAppPath();
+        const monorepoRoot = path.resolve(appPath, '../../../../../../../..');
 
-      let nodePath = possibleNodePaths[0];
-      for (const candidate of possibleNodePaths) {
-        if (fs.existsSync(candidate)) {
-          nodePath = candidate;
-          break;
-        }
+        console.log('[Electron] Dev mode: running full onboarding');
+        console.log('[Electron] Using node from:', nodePath);
+        console.log('[Electron] Using pnpm from:', pnpmPath);
+
+        await runFirstTimeSetup({
+          nodePath,
+          pnpmPath,
+          resourcesPath: process.resourcesPath,
+          monorepoRoot,
+          defaults,
+        });
+
+        console.log('[Electron] First-time setup completed');
+      } else {
+        // In packaged mode: create minimal configuration
+        console.log('[Electron] Packaged mode: creating minimal configuration');
+        const configDir = path.dirname(configPath);
+        fs.mkdirSync(configDir, { recursive: true });
+
+        // Load first-run defaults
+        const defaultsPath = path.join(process.resourcesPath, 'config', 'first-run-defaults.json');
+        const defaults = JSON.parse(fs.readFileSync(defaultsPath, 'utf-8'));
+
+        const minimalConfig = {
+          ai: {
+            provider: defaults.ai.provider || 'custom',
+            model: defaults.ai.model || 'gpt-4',
+            baseUrl: defaults.ai.baseUrl,
+            apiKey: process.env.OPENCLAW_BUNDLED_API_KEY || defaults.ai.apiKey,
+          },
+          workspace: {
+            dir: defaults.workspace.dir || path.join(os.homedir(), 'openclaw-workspace'),
+          },
+        };
+
+        fs.writeFileSync(configPath, JSON.stringify(minimalConfig, null, 2));
+        console.log('[Electron] Minimal configuration created');
       }
-
-      let pnpmPath = 'pnpm';
-      for (const candidate of possiblePnpmPaths) {
-        if (candidate !== 'pnpm' && fs.existsSync(candidate)) {
-          pnpmPath = candidate;
-          break;
-        }
-      }
-      if (pnpmPath === 'pnpm') {
-        pnpmPath = possiblePnpmPaths[possiblePnpmPaths.length - 1]!;
-      }
-
-      await runFirstTimeSetup({
-        nodePath,
-        pnpmPath,
-        resourcesPath: path.join(appPath, '..', 'resources'),
-        monorepoRoot,
-        defaults,
-      });
-
-      console.log('[Electron] First-time setup completed');
     }
 
-    // 生成 Gateway token
     const gatewayToken = crypto.randomBytes(24).toString('hex');
     console.log('[Electron] Generated gateway token');
 
-    // 1. 启动 Gateway 为 subprocess
     console.log('[Electron] Starting Gateway subprocess...');
 
-    // 构造 pnpm openclaw 命令
-    // 在项目根目录运行：pnpm openclaw gateway run --port 18789 --bind loopback
+    const nodePath = findNodePath();
+    const pnpmPath = findPnpmPath();
     const appPath = app.getAppPath();
-    const monorepoRoot = path.resolve(appPath, '../../../../../../../..');
+    const monorepoRoot = app.isPackaged
+      ? process.resourcesPath
+      : path.resolve(appPath, '../../../../../../../..');
 
-    // 尝试找到 node 和 pnpm 可执行文件
-    const possibleNodePaths = [
-      '/Users/tibelf/.nvm/versions/node/v22.12.0/bin/node',
-      process.execPath,
-    ];
-    const possiblePnpmPaths = [
-      '/Users/tibelf/.nvm/versions/node/v22.12.0/bin/pnpm',
-      path.resolve(monorepoRoot, 'node_modules/.bin/pnpm'),
-      path.resolve(monorepoRoot, 'node_modules/.pnpm/.bin/pnpm'),
-      'pnpm',
-    ];
-
-    // 找到第一个存在的 node 和 pnpm
-    let nodePath = possibleNodePaths[0];
-    for (const candidate of possibleNodePaths) {
-      if (fs.existsSync(candidate)) {
-        nodePath = candidate;
-        break;
-      }
-    }
-
-    let pnpmPath = 'pnpm'; // 最终 fallback
-    for (const candidate of possiblePnpmPaths) {
-      if (candidate !== 'pnpm' && fs.existsSync(candidate)) {
-        pnpmPath = candidate;
-        break;
-      }
-    }
-    // 如果没找到，使用 PATH 中的 pnpm
-    if (pnpmPath === 'pnpm') {
-      pnpmPath = possiblePnpmPaths[possiblePnpmPaths.length - 1]!;
-    }
-
-    console.log('[Electron] Running from:', monorepoRoot);
-    console.log('[Electron] Using node from:', nodePath);
-    console.log('[Electron] Using pnpm from:', pnpmPath);
-
-    // 从 node 路径推导 bin 目录，用于增强 PATH
     const nodeBinDir = path.dirname(nodePath);
-    const augmentedPath = [
-      nodeBinDir,
-      '/usr/local/bin',
-      '/opt/homebrew/bin',
-      process.env.PATH || '',
-    ]
+    const augmentedPath = [nodeBinDir, '/usr/local/bin', '/opt/homebrew/bin', process.env.PATH || '']
       .filter(Boolean)
       .join(':');
 
+    console.log('[Electron] Using node from:', nodePath);
+    console.log('[Electron] Using pnpm from:', pnpmPath);
+    console.log('[Electron] Monorepo root:', monorepoRoot);
     console.log('[Electron] Augmented PATH:', augmentedPath);
 
-    // 使用 node 直接运行 pnpm（避免 pnpm 进程管理器的中间层）
-    // 使用 detached: true 创建新的进程组，这样可以一次kill整个进程树
-    gatewayProcess = spawn(nodePath, [pnpmPath, 'openclaw', 'gateway', 'run', '--port', String(PORT), '--bind', 'loopback', '--allow-unconfigured', '--token', gatewayToken], {
-      stdio: ['ignore', 'pipe', 'pipe'],
-      cwd: monorepoRoot,
-      env: { ...process.env, PATH: augmentedPath },
-      detached: true,  // 创建新的进程组
-    });
+    gatewayProcess = spawn(
+      nodePath,
+      [pnpmPath, 'openclaw', 'gateway', 'run', '--port', String(PORT), '--bind', 'loopback', '--allow-unconfigured', '--token', gatewayToken],
+      {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        cwd: monorepoRoot,
+        env: { ...process.env, PATH: augmentedPath },
+        detached: true,
+      }
+    );
 
     if (!gatewayProcess.pid) {
       throw new Error('Failed to spawn Gateway process');
@@ -179,7 +219,6 @@ async function startApp() {
 
     console.log(`[Electron] Gateway process spawned with PID ${gatewayProcess.pid}`);
 
-    // 日志输出
     gatewayProcess.stdout?.on('data', (data) => {
       console.log('[Gateway]', data.toString().trim());
     });
@@ -191,11 +230,9 @@ async function startApp() {
       console.log(`[Electron] Gateway process exited with code ${code} signal ${signal}`);
     });
 
-    // 等待 Gateway HTTP 就绪
     await waitForGateway();
     console.log('[Electron] Gateway started successfully');
 
-    // 2. 创建主窗口，注入 preload
     const preloadPath = path.join(__dirname, 'preload.js');
     console.log('[Electron] Loading preload from:', preloadPath);
 
@@ -208,16 +245,13 @@ async function startApp() {
       },
     });
 
-    // 3. 加载 UI - 通过 Gateway HTTP server
     console.log('[Electron] Loading UI from HTTP');
     await win.loadURL(`http://localhost:${PORT}/#token=${gatewayToken}`);
 
-    // 4. 开发模式打开 DevTools
     if (process.env.NODE_ENV === 'development') {
       win.webContents.openDevTools();
     }
 
-    // 5. 窗口关闭时隐藏到托盘（退出过程中不阻止）
     win.on('close', (e) => {
       if (!isQuitting) {
         e.preventDefault();
@@ -225,8 +259,7 @@ async function startApp() {
       }
     });
 
-    // 6. 托盘常驻
-    const icon = nativeImage.createEmpty(); // TODO: 添加实际图标
+    const icon = nativeImage.createEmpty();
     tray = new Tray(icon);
     tray.setContextMenu(
       Menu.buildFromTemplate([
@@ -264,13 +297,10 @@ async function startApp() {
   }
 }
 
-// 单实例锁：防止多个应用实例同时运行
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
-  // 已有实例运行，直接退出（macOS 会自动激活已有实例）
   app.quit();
 } else {
-  // 当尝试启动第二个实例时激活第一个实例的窗口
   app.on('second-instance', () => {
     console.log('[Electron] Second instance attempted, focusing existing window');
     if (win) {
@@ -288,7 +318,6 @@ if (!gotLock) {
     console.log('[Electron] Before quit: terminating Gateway process');
 
     if (isQuitting && gatewayProcess === null) {
-      // 已经在清理过程中，allow quit
       console.log('[Electron] Already quitting, allowing quit');
       return;
     }
@@ -296,22 +325,20 @@ if (!gotLock) {
     isQuitting = true;
 
     if (gatewayProcess && !gatewayProcess.killed) {
-      e.preventDefault(); // 阻止立即退出
+      e.preventDefault();
 
       const gp = gatewayProcess;
-      const pgid = gp.pid!; // 进程组 ID（因为 detached: true）
-      gatewayProcess = null; // 置 null，防止第二次进入此分支
+      const pgid = gp.pid!;
+      gatewayProcess = null;
 
       const finish = () => {
         console.log('[Electron] Gateway cleanup complete, quitting app');
         app.quit();
       };
 
-      // 尝试优雅关闭：SIGTERM 到进程组 + 2 秒超时后强制 SIGKILL
       const killTimer = setTimeout(() => {
         console.log('[Electron] SIGTERM timeout, forcing SIGKILL to process group');
         try {
-          // 使用负 PID kill 整个进程组
           process.kill(-pgid, 'SIGKILL');
         } catch (err) {
           console.error('[Electron] Error sending SIGKILL:', err);
@@ -325,7 +352,6 @@ if (!gotLock) {
         finish();
       });
 
-      // Kill 整个进程组
       try {
         process.kill(-pgid, 'SIGTERM');
       } catch (err) {
