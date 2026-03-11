@@ -186,28 +186,42 @@ async function startApp() {
     console.log('[Electron] Starting Gateway subprocess...');
 
     const nodePath = findNodePath();
-    const pnpmPath = findPnpmPath();
-    const appPath = app.getAppPath();
-    const monorepoRoot = app.isPackaged
-      ? process.resourcesPath
-      : path.resolve(appPath, '../../../../../../../..');
-
     const nodeBinDir = path.dirname(nodePath);
     const augmentedPath = [nodeBinDir, '/usr/local/bin', '/opt/homebrew/bin', process.env.PATH || '']
       .filter(Boolean)
       .join(':');
 
     console.log('[Electron] Using node from:', nodePath);
-    console.log('[Electron] Using pnpm from:', pnpmPath);
-    console.log('[Electron] Monorepo root:', monorepoRoot);
+
+    let gatewayArgs: string[];
+    let cwdDir: string;
+
+    if (app.isPackaged) {
+      // Packaged mode: run dist/entry.js directly; node_modules are at Resources/node_modules/
+      const entryScript = path.join(process.resourcesPath, 'dist', 'entry.js');
+      gatewayArgs = [entryScript, 'gateway', 'run', '--port', String(PORT), '--bind', 'loopback', '--allow-unconfigured', '--token', gatewayToken];
+      cwdDir = process.resourcesPath;
+      console.log('[Electron] Packaged mode: running dist/entry.js directly');
+      console.log('[Electron] Entry script:', entryScript);
+    } else {
+      // Dev mode: use pnpm openclaw from monorepo root
+      const pnpmPath = findPnpmPath();
+      const appPath = app.getAppPath();
+      const monorepoRoot = path.resolve(appPath, '../../../../../../../..');
+      gatewayArgs = [pnpmPath, 'openclaw', 'gateway', 'run', '--port', String(PORT), '--bind', 'loopback', '--allow-unconfigured', '--token', gatewayToken];
+      cwdDir = monorepoRoot;
+      console.log('[Electron] Dev mode: using pnpm from:', pnpmPath);
+      console.log('[Electron] Monorepo root:', monorepoRoot);
+    }
+
     console.log('[Electron] Augmented PATH:', augmentedPath);
 
     gatewayProcess = spawn(
       nodePath,
-      [pnpmPath, 'openclaw', 'gateway', 'run', '--port', String(PORT), '--bind', 'loopback', '--allow-unconfigured', '--token', gatewayToken],
+      gatewayArgs,
       {
         stdio: ['ignore', 'pipe', 'pipe'],
-        cwd: monorepoRoot,
+        cwd: cwdDir,
         env: { ...process.env, PATH: augmentedPath },
         detached: true,
       }

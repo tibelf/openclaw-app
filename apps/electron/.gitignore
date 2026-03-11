@@ -3,4 +3,6 @@ dist/
 dist-copy/
 node_modules/
 node_modules-copy/
+staging-node-modules/
+staging-tmp/
 *.js.map

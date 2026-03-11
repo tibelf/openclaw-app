@@ -8,13 +8,14 @@ files:
   - dist/**
   - ui/**
   - package.json
-  - node_modules/**
 
 extraResources:
   - from: ../../dist
     to: ../Resources/dist
   - from: ../../dist/control-ui
     to: ../Resources/control-ui
+  - from: staging-node-modules
+    to: ../Resources/node_modules
   - from: config
     to: config
   - from: resources
