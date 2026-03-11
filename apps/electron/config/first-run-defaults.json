@@ -1,7 +1,7 @@
 {
   "ai": {
     "provider": "custom",
-    "apiKey": "sk-0b6773d4a71f416b6d4dfe9de1c809e65a58b66eb1c63d647bfc0aca844eb432",
+    "apiKey": "",
     "model": "doubao-seed-2.0-lite",
     "baseUrl": "https://api.qnaigc.com/v1",
     "compatibility": "openai"
