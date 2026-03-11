@@ -1,0 +1,24 @@
+{
+  "ai": {
+    "provider": "anthropic",
+    "apiKey": "",
+    "model": "claude-haiku-4-5-20251001",
+    "baseUrl": "",
+    "compatibility": "openai"
+  },
+  "gateway": {
+    "port": 18789,
+    "bind": "loopback"
+  },
+  "workspace": {
+    "dir": ""
+  },
+  "skills": {
+    "enabled": [],
+    "nodeManager": "npm"
+  },
+  "hooks": {
+    "enabled": [],
+    "enableInternal": true
+  }
+}
