@@ -2,7 +2,7 @@ import { app, BrowserWindow, Tray, Menu, nativeImage, dialog } from 'electron';
 import path from 'path';
 import os from 'node:os';
 import { fileURLToPath } from 'url';
-import { spawn, type ChildProcess } from 'child_process';
+import { spawn, spawnSync, type ChildProcess } from 'child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { runFirstTimeSetup } from './first-run.js';
@@ -49,6 +49,12 @@ let gatewayProcess: ChildProcess | null = null;
 let win: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let isQuitting = false;
+let gatewayToken = '';
+let gatewayRestartCount = 0;
+let gatewayStartTime = 0;
+const MAX_GATEWAY_RESTARTS = 5;
+let gatewayLogLines: string[] = [];  // 滚动缓冲，最多保留最近 50 行
+let gatewayLogStream: fs.WriteStream | null = null;
 
 // 等待 Gateway 通过 HTTP 就绪
 async function waitForGateway(maxMs = 15000): Promise<void> {
@@ -160,6 +166,154 @@ function findPnpmPath(): string {
   return 'pnpm';
 }
 
+async function runConfigRepair(nodePath: string, args: string[]): Promise<void> {
+  return new Promise((resolve) => {
+    const proc = spawn(nodePath, [...args, 'doctor', '--fix', '--non-interactive'], {
+      stdio: 'pipe',
+      env: { ...process.env },
+    });
+    const timer = setTimeout(() => {
+      proc.kill();
+      resolve();
+    }, 10000);
+    proc.on('exit', () => {
+      clearTimeout(timer);
+      resolve();
+    });
+    proc.on('error', () => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
+}
+
+async function killProcessOnPort(port: number): Promise<void> {
+  try {
+    const result = spawnSync('lsof', ['-ti', `:${port}`], { encoding: 'utf8' });
+    const pids = (result.stdout ?? '').trim().split('\n').filter(Boolean);
+    for (const pid of pids) {
+      try {
+        process.kill(parseInt(pid), 'SIGKILL');
+        console.log(`[Electron] Killed competing process ${pid} on port ${port}`);
+      } catch {
+        // 进程可能已退出，忽略
+      }
+    }
+    if (pids.length > 0) {
+      // 等待端口释放
+      await new Promise(r => setTimeout(r, 500));
+    }
+  } catch {
+    // lsof 不可用或无匹配进程，忽略
+  }
+}
+
+function spawnGateway(token: string): void {
+  const nodePath = findNodePath();
+  const nodeBinDir = path.dirname(nodePath);
+  const augmentedPath = [nodeBinDir, '/usr/local/bin', '/opt/homebrew/bin', process.env.PATH || '']
+    .filter(Boolean)
+    .join(':');
+
+  let gatewayArgs: string[];
+  let cwdDir: string;
+
+  if (app.isPackaged) {
+    const entryScript = path.join(process.resourcesPath, 'dist', 'entry.js');
+    gatewayArgs = [entryScript, 'gateway', 'run', '--port', String(PORT), '--bind', 'loopback', '--allow-unconfigured', '--token', token];
+    cwdDir = process.resourcesPath;
+    console.log('[Electron] Packaged mode: running dist/entry.js directly');
+    console.log('[Electron] Entry script:', path.join(process.resourcesPath, 'dist', 'entry.js'));
+  } else {
+    const pnpmPath = findPnpmPath();
+    const appPath = app.getAppPath();
+    const monorepoRoot = path.resolve(appPath, '../../../../../../../..');
+    gatewayArgs = [pnpmPath, 'openclaw', 'gateway', 'run', '--port', String(PORT), '--bind', 'loopback', '--allow-unconfigured', '--token', token];
+    cwdDir = monorepoRoot;
+    console.log('[Electron] Dev mode: using pnpm from:', pnpmPath);
+    console.log('[Electron] Monorepo root:', monorepoRoot);
+  }
+
+  console.log('[Electron] Using node from:', nodePath);
+  console.log('[Electron] Augmented PATH:', augmentedPath);
+
+  gatewayProcess = spawn(
+    nodePath,
+    gatewayArgs,
+    {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      cwd: cwdDir,
+      env: { ...process.env, PATH: augmentedPath, OPENCLAW_NO_RESPAWN: '1' },
+      detached: true,
+    }
+  );
+
+  if (!gatewayProcess.pid) {
+    throw new Error('Failed to spawn Gateway process');
+  }
+
+  gatewayStartTime = Date.now();
+  console.log(`[Electron] Gateway process spawned with PID ${gatewayProcess.pid}`);
+
+  const appendGatewayLog = (line: string) => {
+    console.log('[Gateway]', line);
+    gatewayLogLines.push(line);
+    if (gatewayLogLines.length > 50) {gatewayLogLines.shift();}
+    gatewayLogStream?.write(line + '\n');
+  };
+
+  gatewayProcess.stdout?.on('data', (data) => {
+    for (const line of data.toString().split('\n').filter(Boolean)) {appendGatewayLog(line);}
+  });
+  gatewayProcess.stderr?.on('data', (data) => {
+    for (const line of data.toString().split('\n').filter(Boolean)) {appendGatewayLog(line);}
+  });
+
+  gatewayProcess.on('exit', (code, signal) => {
+    console.log(`[Electron] Gateway process exited with code ${code} signal ${signal}`);
+    if (!isQuitting) {
+      // 如果稳定运行超过 30 秒，说明是外部原因导致退出，重置计数器
+      const uptime = Date.now() - gatewayStartTime;
+      if (uptime > 30000) {
+        console.log(`[Electron] Gateway ran for ${uptime}ms, resetting restart counter`);
+        gatewayRestartCount = 0;
+      }
+      scheduleGatewayRestart();
+    }
+  });
+}
+
+function scheduleGatewayRestart(): void {
+  if (gatewayRestartCount >= MAX_GATEWAY_RESTARTS) {
+    dialog.showErrorBox('OpenClaw 后台服务异常', '后台服务多次崩溃，请重启应用');
+    return;
+  }
+  gatewayRestartCount++;
+  const delay = Math.min(1000 * gatewayRestartCount, 5000);
+  console.log(`[Electron] Gateway exited, restarting in ${delay}ms (attempt ${gatewayRestartCount})`);
+  setTimeout(async () => {
+    if (isQuitting) {return;}
+    // 先 kill 占用端口的竞争进程（如 macOS 菜单栏 App 的 gateway）
+    await killProcessOnPort(PORT);
+    spawnGateway(gatewayToken);
+    try {
+      await waitForGateway();
+      // 验证是否是我们的 gateway 仍在运行（端口竞争时我们的进程会退出）
+      if (gatewayProcess?.exitCode !== null) {
+        throw new Error('Our gateway exited after start, possible port conflict');
+      }
+      console.log('[Electron] Gateway restarted successfully, reloading UI');
+      gatewayRestartCount = 0;
+      if (win && !win.isDestroyed()) {
+        await win.loadURL(`http://localhost:${PORT}/#token=${gatewayToken}`);
+      }
+    } catch (err) {
+      console.error('[Electron] Gateway restart verification failed:', err);
+      // waitForGateway 失败说明 gateway 又挂了，exit handler 会再次触发重启
+    }
+  }, delay);
+}
+
 async function startApp() {
   if (isQuitting) {
     console.log('[Electron] App is quitting, skipping startApp');
@@ -180,6 +334,7 @@ async function startApp() {
 
   try {
     updateLoadingStatus('检测应用配置...');
+    const nodePath = findNodePath();
     const configPath = path.join(os.homedir(), '.openclaw', 'openclaw.json');
     const isFirstRun = !fs.existsSync(configPath);
 
@@ -195,8 +350,6 @@ async function startApp() {
           console.log('[Electron] Copy config/first-run-defaults.json.example to config/first-run-defaults.json and fill in your API key');
         } else {
           const defaults = JSON.parse(fs.readFileSync(defaultsPath, 'utf-8'));
-
-          const nodePath = findNodePath();
           const pnpmPath = findPnpmPath();
           const appPath = app.getAppPath();
           const monorepoRoot = path.resolve(appPath, '../../../../../../../..');
@@ -218,7 +371,6 @@ async function startApp() {
       } else {
         // Packaged mode: run real onboarding using dist/entry.js
         console.log('[Electron] Packaged mode: running onboarding via dist/entry.js');
-        const nodePath = findNodePath();
         const entryScript = path.join(process.resourcesPath, 'dist', 'entry.js');
         const defaultsPath = path.join(process.resourcesPath, 'config', 'first-run-defaults.json');
         const defaults = JSON.parse(fs.readFileSync(defaultsPath, 'utf-8'));
@@ -235,74 +387,41 @@ async function startApp() {
       }
     }
 
-    const gatewayToken = crypto.randomBytes(24).toString('hex');
+    // 启动 Gateway 前修复 config（清理无效 key，防止 Gateway 解析失败）
+    updateLoadingStatus('检查配置完整性...');
+    console.log('[Electron] Running config repair...');
+    if (app.isPackaged) {
+      const entryScript = path.join(process.resourcesPath, 'dist', 'entry.js');
+      await runConfigRepair(nodePath, [entryScript]);
+    } else {
+      const pnpmPath = findPnpmPath();
+      await runConfigRepair(nodePath, [pnpmPath, 'openclaw']);
+    }
+    console.log('[Electron] Config repair done');
+
+    gatewayToken = crypto.randomBytes(24).toString('hex');
     console.log('[Electron] Generated gateway token');
 
     console.log('[Electron] Starting Gateway subprocess...');
     updateLoadingStatus('启动后台服务...');
 
-    const nodePath = findNodePath();
-    const nodeBinDir = path.dirname(nodePath);
-    const augmentedPath = [nodeBinDir, '/usr/local/bin', '/opt/homebrew/bin', process.env.PATH || '']
-      .filter(Boolean)
-      .join(':');
+    // 初始化 gateway 日志文件
+    const logDir = app.getPath('logs');
+    fs.mkdirSync(logDir, { recursive: true });
+    const logPath = path.join(logDir, 'gateway.log');
+    gatewayLogLines = [];
+    gatewayLogStream?.end();
+    gatewayLogStream = fs.createWriteStream(logPath, { flags: 'a' });
+    gatewayLogStream.write(`\n=== Gateway started at ${new Date().toISOString()} ===\n`);
 
-    console.log('[Electron] Using node from:', nodePath);
-
-    let gatewayArgs: string[];
-    let cwdDir: string;
-
-    if (app.isPackaged) {
-      // Packaged mode: run dist/entry.js directly; node_modules are at Resources/node_modules/
-      const entryScript = path.join(process.resourcesPath, 'dist', 'entry.js');
-      gatewayArgs = [entryScript, 'gateway', 'run', '--port', String(PORT), '--bind', 'loopback', '--allow-unconfigured', '--token', gatewayToken];
-      cwdDir = process.resourcesPath;
-      console.log('[Electron] Packaged mode: running dist/entry.js directly');
-      console.log('[Electron] Entry script:', entryScript);
-    } else {
-      // Dev mode: use pnpm openclaw from monorepo root
-      const pnpmPath = findPnpmPath();
-      const appPath = app.getAppPath();
-      const monorepoRoot = path.resolve(appPath, '../../../../../../../..');
-      gatewayArgs = [pnpmPath, 'openclaw', 'gateway', 'run', '--port', String(PORT), '--bind', 'loopback', '--allow-unconfigured', '--token', gatewayToken];
-      cwdDir = monorepoRoot;
-      console.log('[Electron] Dev mode: using pnpm from:', pnpmPath);
-      console.log('[Electron] Monorepo root:', monorepoRoot);
-    }
-
-    console.log('[Electron] Augmented PATH:', augmentedPath);
-
-    gatewayProcess = spawn(
-      nodePath,
-      gatewayArgs,
-      {
-        stdio: ['ignore', 'pipe', 'pipe'],
-        cwd: cwdDir,
-        env: { ...process.env, PATH: augmentedPath },
-        detached: true,
-      }
-    );
-
-    if (!gatewayProcess.pid) {
-      throw new Error('Failed to spawn Gateway process');
-    }
-
-    console.log(`[Electron] Gateway process spawned with PID ${gatewayProcess.pid}`);
-
-    gatewayProcess.stdout?.on('data', (data) => {
-      console.log('[Gateway]', data.toString().trim());
-    });
-    gatewayProcess.stderr?.on('data', (data) => {
-      console.error('[Gateway]', data.toString().trim());
-    });
-
-    gatewayProcess.on('exit', (code, signal) => {
-      console.log(`[Electron] Gateway process exited with code ${code} signal ${signal}`);
-    });
+    // 清理可能占用端口的竞争进程（如 macOS 菜单栏 App 的 gateway）
+    await killProcessOnPort(PORT);
+    spawnGateway(gatewayToken);
 
     updateLoadingStatus('等待服务就绪...');
     await waitForGateway();
     console.log('[Electron] Gateway started successfully');
+    gatewayRestartCount = 0; // 成功启动后重置崩溃计数
 
     console.log('[Electron] Loading UI from HTTP');
     await win.loadURL(`http://localhost:${PORT}/#token=${gatewayToken}`);
@@ -351,7 +470,18 @@ async function startApp() {
     console.log('[Electron] App started successfully');
   } catch (err) {
     console.error('[Electron] Failed to start app:', err);
-    dialog.showErrorBox('OpenClaw 启动失败', `启动错误: ${String(err)}`);
+    const logPath = path.join(app.getPath('logs'), 'gateway.log');
+    const lastLines = gatewayLogLines.slice(-20).join('\n');
+    const detail = lastLines
+      ? `Gateway 最后输出:\n${lastLines}\n\n完整日志: ${logPath}`
+      : `完整日志: ${logPath}`;
+    dialog.showMessageBoxSync({
+      type: 'error',
+      title: 'OpenClaw 启动失败',
+      message: String(err),
+      detail,
+      buttons: ['确定'],
+    });
     app.quit();
   }
 }
@@ -392,6 +522,12 @@ if (!gotLock) {
 
       const finish = () => {
         console.log('[Electron] Gateway cleanup complete, quitting app');
+        // openclaw-gateway 可能以独立 daemon 方式运行（独立进程组），额外 pkill 确保清理
+        try {
+          spawnSync('pkill', ['-x', 'openclaw-gateway'], { stdio: 'ignore' });
+        } catch {
+          // 忽略（进程不存在时 pkill 返回非零，属正常）
+        }
         app.quit();
       };
 
