@@ -49,6 +49,7 @@ let gatewayProcess: ChildProcess | null = null;
 let win: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let isQuitting = false;
+let isManualRetrying = false;
 let gatewayToken = '';
 let gatewayRestartCount = 0;
 let gatewayStartTime = 0;
@@ -168,7 +169,7 @@ function findPnpmPath(): string {
 
 async function runConfigRepair(nodePath: string, args: string[]): Promise<void> {
   return new Promise((resolve) => {
-    const proc = spawn(nodePath, [...args, 'doctor', '--fix', '--non-interactive'], {
+    const proc = spawn(nodePath, [...args, 'doctor', '--fix', '--yes'], {
       stdio: 'pipe',
       env: { ...process.env },
     });
@@ -185,6 +186,16 @@ async function runConfigRepair(nodePath: string, args: string[]): Promise<void> 
       resolve();
     });
   });
+}
+
+function backupAndResetConfig(): boolean {
+  const configPath = path.join(os.homedir(), '.openclaw', 'openclaw.json');
+  if (!fs.existsSync(configPath)) {return false;}
+  const bakPath = configPath + '.bak';
+  fs.copyFileSync(configPath, bakPath);
+  fs.unlinkSync(configPath);
+  console.log(`[Electron] Config backed up to ${bakPath} and removed`);
+  return true;
 }
 
 async function killProcessOnPort(port: number): Promise<void> {
@@ -271,7 +282,7 @@ function spawnGateway(token: string): void {
 
   gatewayProcess.on('exit', (code, signal) => {
     console.log(`[Electron] Gateway process exited with code ${code} signal ${signal}`);
-    if (!isQuitting) {
+    if (!isQuitting && !isManualRetrying) {
       // 如果稳定运行超过 30 秒，说明是外部原因导致退出，重置计数器
       const uptime = Date.now() - gatewayStartTime;
       if (uptime > 30000) {
@@ -419,7 +430,61 @@ async function startApp() {
     spawnGateway(gatewayToken);
 
     updateLoadingStatus('等待服务就绪...');
-    await waitForGateway();
+    try {
+      await waitForGateway();
+    } catch (gatewayErr) {
+      // 检查 gateway 日志中是否含 Config invalid（可能由无效插件引用等导致）
+      const hasConfigError = gatewayLogLines.some(
+        line => line.includes('Invalid config') || line.includes('Config invalid')
+      );
+      if (!hasConfigError) {throw gatewayErr;}
+
+      console.log('[Electron] Config invalid detected in gateway logs, attempting config backup + reset + retry');
+      isManualRetrying = true;
+      try {
+        // 终止已退出/卡住的 gateway 进程
+        if (gatewayProcess && !gatewayProcess.killed) {
+          gatewayProcess.kill('SIGKILL');
+          gatewayProcess = null;
+        }
+
+        updateLoadingStatus('配置异常，正在重置...');
+        backupAndResetConfig();
+
+        // 重新运行 first-run setup 以重建干净的 config；失败时记录日志但不中断，gateway 有 --allow-unconfigured 仍可启动
+        updateLoadingStatus('重新初始化配置...');
+        try {
+          if (!app.isPackaged) {
+            const defaultsPath = path.join(app.getAppPath(), 'config', 'first-run-defaults.json');
+            if (fs.existsSync(defaultsPath)) {
+              const defaults = JSON.parse(fs.readFileSync(defaultsPath, 'utf-8'));
+              const pnpmPath = findPnpmPath();
+              const appPath = app.getAppPath();
+              const monorepoRoot = path.resolve(appPath, '../../../../../../../..');
+              await runFirstTimeSetup({ nodePath, clawCommand: [pnpmPath, 'openclaw'], resourcesPath: process.resourcesPath, monorepoRoot, defaults });
+            }
+          } else {
+            const entryScript = path.join(process.resourcesPath, 'dist', 'entry.js');
+            const defaultsPath = path.join(process.resourcesPath, 'config', 'first-run-defaults.json');
+            const defaults = JSON.parse(fs.readFileSync(defaultsPath, 'utf-8'));
+            await runFirstTimeSetup({ nodePath, clawCommand: [entryScript], resourcesPath: process.resourcesPath, monorepoRoot: process.resourcesPath, defaults });
+          }
+        } catch (setupErr) {
+          console.warn('[Electron] First-run setup failed after config reset, proceeding without it:', setupErr);
+        }
+
+        // 重置日志缓冲区，重新启动 gateway
+        gatewayLogLines = [];
+        gatewayLogStream?.write(`\n=== Gateway restarted after config reset at ${new Date().toISOString()} ===\n`);
+        await killProcessOnPort(PORT);
+        spawnGateway(gatewayToken);
+        updateLoadingStatus('等待服务就绪（重试）...');
+        await waitForGateway();
+        console.log('[Electron] Gateway started successfully after config reset');
+      } finally {
+        isManualRetrying = false;
+      }
+    }
     console.log('[Electron] Gateway started successfully');
     gatewayRestartCount = 0; // 成功启动后重置崩溃计数
 
