@@ -55,28 +55,32 @@ BrowserWindow
 
 ### Electron 应用源码
 
-| 文件 | 用途 | 关键变量/函数 |
-|------|------|---------------|
-| `apps/electron/src/main.ts` | Electron Main Process：spawn Gateway + 创建窗口 + 托盘管理 | `PORT=18789`, `waitForGateway()`, `startApp()`, 首次运行检测 |
-| `apps/electron/src/preload.ts` | Preload 脚本：向 window 注入配置对象 | `window.__OPENCLAW_DESKTOP__` |
-| `apps/electron/src/gateway.d.ts` | 类型声明，规避 TypeScript 模块解析 | （仅限类型，无运行时代码） |
-| `apps/electron/src/first-run.ts` | 首次运行初始化驱动 | `runFirstTimeSetup()`, onboarding、Skills/Hooks 复制 |
-| `apps/electron/config/first-run-defaults.json` | 首次运行配置（**gitignored**，本地创建，勿提交）| provider、apiKey、model、baseUrl、compatibility |
-| `apps/electron/config/first-run-defaults.json.example` | 配置模板（已提交到仓库，复制后填入真实值）| 同上 |
+| 文件                                                   | 用途                                                                          | 关键变量/函数                                                                              |
+| ------------------------------------------------------ | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `apps/electron/src/main.ts`                            | Electron Main Process：spawn Gateway + 创建窗口 + 托盘管理 + New-API 登录 IPC | `PORT=18789`, `waitForGateway()`, `startApp()`, `doNewApiLogin()`, `updateGatewayApiKey()` |
+| `apps/electron/src/preload.cjs`                        | 主窗口 Preload（CJS 格式）：注入 `window.__OPENCLAW_DESKTOP__`                | `window.__OPENCLAW_DESKTOP__`, `window.electronAPI`                                        |
+| `apps/electron/src/preload-auth.cjs`                   | 登录窗口 Preload（CJS 格式）：注入 `window.electronAPI` 供 auth.html 调用     | `doLogin()`, `saveAuthToken()`, `getAccountInfo()`                                         |
+| `apps/electron/src/auth-store.ts`                      | 认证信息持久化（`~/Library/Application Support/OpenClaw/auth.json`）          | `getStoredAuth()`, `saveAuth()`, `clearAuth()`                                             |
+| `apps/electron/src/gateway.d.ts`                       | 类型声明，规避 TypeScript 模块解析                                            | （仅限类型，无运行时代码）                                                                 |
+| `apps/electron/src/first-run.ts`                       | 首次运行初始化驱动                                                            | `runFirstTimeSetup()`, onboarding、Skills/Hooks 复制                                       |
+| `apps/electron/config/first-run-defaults.json`         | 首次运行配置（**gitignored**，本地创建，勿提交）                              | provider、apiKey、model、baseUrl、compatibility、newapi.baseUrl                            |
+| `apps/electron/config/first-run-defaults.json.example` | 配置模板（已提交到仓库，复制后填入真实值）                                    | 同上                                                                                       |
 
 ### 打包配置
 
-| 文件 | 用途 |
-|------|------|
-| `apps/electron/electron-builder.yml` | 打包流程：资源复制 + 代码签名 + 生成 DMG/ZIP/EXE |
+| 文件                                    | 用途                                                         |
+| --------------------------------------- | ------------------------------------------------------------ |
+| `apps/electron/electron-builder.yml`    | 打包流程：资源复制 + 代码签名 + 生成 DMG/ZIP/EXE             |
 | `apps/electron/scripts/copy-assets.mjs` | Prebuild 脚本：复制 `dist/` 和 `dist/control-ui/` 到资源路径 |
-| `apps/electron/package.json` | Workspace 配置 + 脚本定义 |
+| `apps/electron/package.json`            | Workspace 配置 + 脚本定义                                    |
 
 ### UI 相关
 
-| 文件 | 用途 |
-|------|------|
-| `apps/electron/ui/index.html` | 自定义 HTML 入口（通常为空，直接加载 Gateway UI） |
+| 文件                            | 用途                                                                                 |
+| ------------------------------- | ------------------------------------------------------------------------------------ |
+| `apps/electron/ui/index.html`   | 自定义 HTML 入口（通常为空，直接加载 Gateway UI）                                    |
+| `apps/electron/ui/auth.html`    | 登录窗口 UI，调用 `window.electronAPI.doLogin()` → IPC → 主进程执行 New-API 5 步认证 |
+| `apps/electron/ui/account.html` | 账号信息窗口 UI，显示当前登录用户信息 + 退出登录按钮                                 |
 
 ---
 
@@ -84,11 +88,11 @@ BrowserWindow
 
 Electron 应用为了支持隐藏高级功能（如 debug、nodes、instances tab），需要对上游代码做**最小化改动**：
 
-| 文件 | 改动内容 | 行数 | 原因 |
-|------|----------|------|------|
-| `ui/src/ui/navigation.ts` | 添加 `getVisibleTabGroups()` 函数，支持通过 `window.__OPENCLAW_DESKTOP__.hiddenTabs` 过滤 Tab | ~10 行 | 隐藏高级 Tab，实现分级 UI |
-| `ui/src/ui/app-render.ts` | 将 `TAB_GROUPS` 替换为 `getVisibleTabGroups()` 调用 | ~5 行 | 同上 |
-| `src/infra/control-ui-assets.ts` | 添加 `process.resourcesPath` 作为 UI 资源搜索候选路径 | ~3 行 | 从 Electron asar 外资源加载 UI |
+| 文件                             | 改动内容                                                                                      | 行数   | 原因                           |
+| -------------------------------- | --------------------------------------------------------------------------------------------- | ------ | ------------------------------ |
+| `ui/src/ui/navigation.ts`        | 添加 `getVisibleTabGroups()` 函数，支持通过 `window.__OPENCLAW_DESKTOP__.hiddenTabs` 过滤 Tab | ~10 行 | 隐藏高级 Tab，实现分级 UI      |
+| `ui/src/ui/app-render.ts`        | 将 `TAB_GROUPS` 替换为 `getVisibleTabGroups()` 调用                                           | ~5 行  | 同上                           |
+| `src/infra/control-ui-assets.ts` | 添加 `process.resourcesPath` 作为 UI 资源搜索候选路径                                         | ~3 行  | 从 Electron asar 外资源加载 UI |
 
 **总计改动 < 20 行代码**，影响范围极小，上游更新时冲突概率低。
 
@@ -100,22 +104,31 @@ Electron 应用为了支持隐藏高级功能（如 debug、nodes、instances ta
 
 ```typescript
 // 构造命令：pnpm openclaw gateway run --port 18789 --bind loopback --allow-unconfigured --token <token>
-const gatewayToken = crypto.randomBytes(24).toString('hex');
-const gatewayProcess = spawn(pnpmPath, [
-  'openclaw',
-  'gateway', 'run',
-  '--port', String(PORT),
-  '--bind', 'loopback',
-  '--allow-unconfigured',  // 跳过 credential 校验
-  '--token', gatewayToken, // 最高优先级，覆盖配置文件中的 token（防止 config-first token mismatch）
-], {
-  stdio: ['ignore', 'pipe', 'pipe'],  // 捕获 stdout/stderr
-  cwd: monorepoRoot,                  // 项目根目录
-  env: process.env,                   // 继承环境变量
-});
+const gatewayToken = crypto.randomBytes(24).toString("hex");
+const gatewayProcess = spawn(
+  pnpmPath,
+  [
+    "openclaw",
+    "gateway",
+    "run",
+    "--port",
+    String(PORT),
+    "--bind",
+    "loopback",
+    "--allow-unconfigured", // 跳过 credential 校验
+    "--token",
+    gatewayToken, // 最高优先级，覆盖配置文件中的 token（防止 config-first token mismatch）
+  ],
+  {
+    stdio: ["ignore", "pipe", "pipe"], // 捕获 stdout/stderr
+    cwd: monorepoRoot, // 项目根目录
+    env: process.env, // 继承环境变量
+  },
+);
 ```
 
 **关键点**：
+
 - `--bind loopback` 确保 Gateway 只在本地可访问（安全）
 - `--allow-unconfigured` 跳过初始化检查，允许新用户启动应用
 - `--token <token>` 传递随机生成的 token，优先级高于配置文件（`~/.openclaw/openclaw.json`），防止用户曾配置 token 时发生 mismatch
@@ -128,10 +141,12 @@ const gatewayProcess = spawn(pnpmPath, [
 ```typescript
 // 从 main.ts 调用（首次运行检测）
 if (!configExists) {
-  const defaults = JSON.parse(fs.readFileSync(path.join(resourcesPath, 'config/first-run-defaults.json'), 'utf-8'));
+  const defaults = JSON.parse(
+    fs.readFileSync(path.join(resourcesPath, "config/first-run-defaults.json"), "utf-8"),
+  );
   await runFirstTimeSetup({
     nodePath,
-    clawCommand: [pnpmPath, 'openclaw'],  // 或 packaged 模式的 node dist/entry.js
+    clawCommand: [pnpmPath, "openclaw"], // 或 packaged 模式的 node dist/entry.js
     resourcesPath,
     monorepoRoot,
     defaults,
@@ -165,20 +180,21 @@ if (!configExists) {
 ```json
 {
   "ai": {
-    "provider": "custom",              // 或 "anthropic", "openrouter"
-    "apiKey": "sk-xxx",                 // 可通过 OPENCLAW_BUNDLED_API_KEY 覆盖
+    "provider": "custom", // 或 "anthropic", "openrouter"
+    "apiKey": "sk-xxx", // 可通过 OPENCLAW_BUNDLED_API_KEY 覆盖
     "model": "deepseek-chat",
-    "baseUrl": "https://api.deepseek.com/v1",  // 仅 provider=custom 时生效
-    "compatibility": "openai"           // 或 "anthropic"
+    "baseUrl": "https://api.deepseek.com/v1", // 仅 provider=custom 时生效
+    "compatibility": "openai" // 或 "anthropic"
   },
   "gateway": { "port": 18789, "bind": "loopback" },
-  "workspace": { "dir": "" },           // 为空则用 ~/openclaw-workspace
+  "workspace": { "dir": "" }, // 为空则用 ~/openclaw-workspace
   "skills": { "enabled": [], "nodeManager": "npm" },
   "hooks": { "enabled": [], "enableInternal": true }
 }
 ```
 
 **支持的 Provider**：
+
 - `anthropic`: Anthropic 官方 API
 - `custom`: 第三方 LLM 服务（DeepSeek、自托管 LLM、Anthropic 兼容服务）
 - `openrouter`: OpenRouter 中介服务
@@ -190,6 +206,7 @@ if (!configExists) {
 `startApp()` 在做任何初始化之前立即创建 BrowserWindow 并显示内嵌加载页，随初始化进展通过 `updateLoadingStatus()` 更新状态文案，Gateway 就绪后无缝切换到真实 UI。
 
 关键实现：
+
 - `LOADING_HTML`：内嵌 `data:text/html` 加载页，包含 `#status` div
 - `updateLoadingStatus(message)`：通过 `executeJavaScript` 更新 `#status` 文本内容，窗口已销毁时静默忽略
 - `backgroundColor: '#0f1117'`：与加载页背景色一致，防止切换时闪白
@@ -222,13 +239,13 @@ async function waitForGateway(maxMs = 15000): Promise<void> {
     try {
       const res = await fetch(`http://localhost:${PORT}/`);
       if (res.ok || res.status === 404) {
-        console.log('[Electron] Gateway is ready');
-        return;  // HTTP 服务就绪
+        console.log("[Electron] Gateway is ready");
+        return; // HTTP 服务就绪
       }
     } catch {
       // 继续轮询...
     }
-    await new Promise(r => setTimeout(r, 200));
+    await new Promise((r) => setTimeout(r, 200));
   }
   throw new Error(`Gateway did not start in ${maxMs}ms`);
 }
@@ -248,20 +265,49 @@ win.loadURL(`http://localhost:${PORT}/#token=${gatewayToken}`);
 
 **token 注入**：通过 URL hash `#token=<token>` 将随机 token 传递给 Web UI。Web UI 读取后在 WebSocket 握手时携带，与 Gateway 验证匹配。
 
-### 4. Preload 脚本注入配置（`src/preload.ts`）
+### 4. Preload 脚本（`src/preload.cjs` / `src/preload-auth.cjs`）
 
-```typescript
-// 仅在 Electron 环境中运行
-if (process.contextIsolation) {
-  window.__OPENCLAW_DESKTOP__ = {
-    hiddenTabs: ['debug', 'nodes', 'instances'],  // 隐藏的高级功能
-    brandName: 'OpenClaw',                        // 品牌名（可选）
-    gatewayUrl: 'ws://localhost:18789',          // WebSocket 地址
-  };
-}
+Preload 脚本必须是 **CommonJS 格式**（`.cjs` 扩展名），因为：
+
+- `apps/electron/package.json` 声明了 `"type": "module"`，tsc 编译产物为 ESM
+- Electron 沙箱不支持在 preload 中使用 `import` 语句
+- 使用 `.cjs` 扩展名让 Node 始终以 CJS 方式加载，即使 package 为 ESM
+
+```javascript
+// preload.cjs（主窗口）
+const { contextBridge, ipcRenderer } = require("electron");
+contextBridge.exposeInMainWorld("__OPENCLAW_DESKTOP__", {
+  hiddenTabs: ["debug", "nodes", "instances"],
+  gatewayUrl: "ws://localhost:18789",
+  brandName: "OpenClaw",
+});
+
+// preload-auth.cjs（登录窗口）
+contextBridge.exposeInMainWorld("electronAPI", {
+  doLogin: (username, password) => ipcRenderer.invoke("auth:do-login", username, password),
+  // ...
+});
 ```
 
-**安全性**：使用 `contextIsolation: true`，preload 脚本在独立沙箱中运行，无法访问主进程 API。
+**构建注意**：tsc 不复制 `.cjs` 文件，需在编译后手动复制：
+
+```bash
+tsc && cp src/preload*.cjs dist/
+```
+
+### 5. New-API 登录流程（`src/main.ts`）
+
+登录在主进程通过 `net.fetch` 执行（无 CORS 限制），共 5 步：
+
+1. `POST /api/user/login` → 获取 `userId`（依赖 session cookie）
+2. `GET /api/user/token` → 获取 `accessToken`
+3. `GET /api/token/` → 查询现有 AI 令牌列表
+4. 若列表为空：`POST /api/token/` 创建令牌
+5. `POST /api/token/{id}/key` → 获取 `apiKey`（格式：`sk-xxx`）
+
+登录成功后，`apiKey` 通过 `updateGatewayApiKey()` 写入 `~/.openclaw/openclaw.json`，供 Gateway 使用。
+
+**注意**：`updateGatewayApiKey()` 匹配前缀 `custom-` 的 provider（如 `custom-111-62-212-10-3000`），不要误写成 `custom-api-`。
 
 ---
 
@@ -284,6 +330,7 @@ pnpm desktop:build
 ```
 
 **输出**：
+
 - macOS: `apps/electron/build/OpenClaw-2026.3.9-arm64.dmg` (~121 MB)
 - macOS: `apps/electron/build/OpenClaw-2026.3.9-arm64-mac.zip` (~118 MB)
 - Windows: `apps/electron/build/OpenClaw Setup 2026.3.9.exe`
@@ -298,7 +345,7 @@ pnpm desktop:build
 
 ```json
 {
-  "dependencies": {},  // 空！不能有任何运行时依赖
+  "dependencies": {}, // 空！不能有任何运行时依赖
   "devDependencies": {
     "electron": "^35.0.0",
     "electron-builder": "^25.0.0",
@@ -308,12 +355,14 @@ pnpm desktop:build
 ```
 
 **原因**：
+
 - pnpm 为 workspace 依赖创建 symlink（例如 `"openclaw": "workspace:*"` 会 symlink 到仓库根目录）
 - electron-builder 跟随 symlink，扫描整个仓库文件
 - 打包时会尝试签名 symlink 指向的所有文件（包括 `.env`、`CLAUDE.md` 等）
 - 签名阶段这些文件不在 asar 中，导致 `ENOENT` 错误
 
 **解决方案**：
+
 - 不在 `dependencies` 中添加 `openclaw`
 - 而是在启动时通过 `spawn(pnpmPath, [...])` 直接调用 `pnpm openclaw gateway run`
 - pnpm monorepo 会自动解析命令，无需显式依赖
@@ -327,6 +376,7 @@ pnpm desktop:build
 当前检测首次运行的逻辑是检查 `~/.openclaw/openclaw.json` 是否存在。
 
 **待改进**：
+
 - 添加版本检查，支持大版本升级时重新运行 onboarding（可选）
 - 支持可选的 `--force-onboard` CLI 参数强制重新初始化
 
@@ -344,6 +394,7 @@ pnpm desktop:build
 当前应用中没有提供"重启 Gateway"按钮。
 
 **待改进**：
+
 - 添加托盘菜单项："Restart Gateway"
 - 实现：`gatewayProcess.kill()` + `startGateway()` 重启流程
 - 或提供日志查看窗口（`tail -f /tmp/openclaw-gateway.log`）
@@ -351,6 +402,7 @@ pnpm desktop:build
 ### 3. Windows 构建验证
 
 macOS 构建已测试并成功。Windows 部分需要在 Windows 机器上验证：
+
 - `.exe` 安装包是否能正常运行
 - Squirrel.Windows 自动更新流程
 
@@ -359,6 +411,7 @@ macOS 构建已测试并成功。Windows 部分需要在 Windows 机器上验证
 当前未集成 electron-updater。
 
 **待实现**：
+
 - 配置 Squirrel（Windows）或 Sparkle（macOS）
 - 自动检查更新 + 后台下载 + 提示安装
 
@@ -394,6 +447,7 @@ macOS 构建已测试并成功。Windows 部分需要在 Windows 机器上验证
 # 编译 UI + 启动 Electron（带 DevTools）
 pnpm desktop:dev
 ```
+
 ### 开发构建
 
 ```bash
@@ -434,4 +488,3 @@ pnpm desktop:build
 - **Electron 文档**：https://www.electronjs.org/docs
 - **electron-builder**：https://www.electron.build/
 - **OpenClaw 核心架构**：见根目录 `CLAUDE.md` 和 `AGENTS.md`
-
