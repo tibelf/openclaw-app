@@ -80,7 +80,7 @@ BrowserWindow
 | ------------------------------- | ------------------------------------------------------------------------------------ |
 | `apps/electron/ui/index.html`   | 自定义 HTML 入口（通常为空，直接加载 Gateway UI）                                    |
 | `apps/electron/ui/auth.html`    | 登录窗口 UI，调用 `window.electronAPI.doLogin()` → IPC → 主进程执行 New-API 5 步认证 |
-| `apps/electron/ui/account.html` | 账号信息窗口 UI，显示当前登录用户信息 + 退出登录按钮                                 |
+| `apps/electron/ui/account.html` | 账号窗口 UI（浅色主题）：用户名、余额（次数）、消费记录列表（`/api/log`）、充值/退出按钮 |
 
 ---
 
@@ -91,7 +91,8 @@ Electron 应用为了支持隐藏高级功能（如 debug、nodes、instances ta
 | 文件                             | 改动内容                                                                                      | 行数   | 原因                           |
 | -------------------------------- | --------------------------------------------------------------------------------------------- | ------ | ------------------------------ |
 | `ui/src/ui/navigation.ts`        | 添加 `getVisibleTabGroups()` 函数，支持通过 `window.__OPENCLAW_DESKTOP__.hiddenTabs` 过滤 Tab | ~10 行 | 隐藏高级 Tab，实现分级 UI      |
-| `ui/src/ui/app-render.ts`        | 将 `TAB_GROUPS` 替换为 `getVisibleTabGroups()` 调用                                           | ~5 行  | 同上                           |
+| `ui/src/ui/app-render.ts`        | 将 `TAB_GROUPS` 替换为 `getVisibleTabGroups()` 调用；移除 account 占位页面                    | ~5 行  | 同上；account tab 改为直接弹窗 |
+| `ui/src/ui/app-render.helpers.ts`| `renderTab()` 中拦截 account tab 点击，直接调用 `openAccountWindow()` 不切换侧栏              | ~9 行  | 点击账户侧栏直接弹出独立窗口   |
 | `src/infra/control-ui-assets.ts` | 添加 `process.resourcesPath` 作为 UI 资源搜索候选路径                                         | ~3 行  | 从 Electron asar 外资源加载 UI |
 
 **总计改动 < 20 行代码**，影响范围极小，上游更新时冲突概率低。
