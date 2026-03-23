@@ -72,6 +72,14 @@ export function renderTab(state: AppViewState, tab: Tab) {
             void state.loadAssistantIdentity();
           }
         }
+        if (tab === "account") {
+          const api = (window as unknown as { electronAPI?: { openAccountWindow?: () => void } })
+            .electronAPI;
+          if (api?.openAccountWindow) {
+            api.openAccountWindow();
+          }
+          return;
+        }
         state.setTab(tab);
       }}
       title=${titleForTab(tab)}

@@ -7,40 +7,81 @@
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
-    background: #0f1117;
-    color: #e2e8f0;
+    background: #f5f7fa;
+    color: #1a1a2e;
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     font-size: 14px;
-    padding: 24px;
-  }
-  h2 { font-size: 18px; font-weight: 600; margin-bottom: 20px; color: #fff; }
-  .card {
-    background: #1a1d27;
-    border: 1px solid rgba(255,255,255,0.08);
-    border-radius: 10px;
     padding: 20px;
-    margin-bottom: 16px;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
   }
-  .card-title { font-size: 13px; color: #64748b; margin-bottom: 10px; text-transform: uppercase; letter-spacing: 0.5px; }
-  .balance {
-    font-size: 32px;
-    font-weight: 700;
-    color: #34d399;
+  h2 { font-size: 17px; font-weight: 600; margin-bottom: 14px; color: #111827; }
+  .card {
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
+    padding: 16px 18px;
+    margin-bottom: 12px;
   }
-  .balance-unit { font-size: 16px; color: #64748b; margin-left: 4px; }
-  .info-row {
+  .user-row {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 8px 0;
-    border-bottom: 1px solid rgba(255,255,255,0.06);
   }
-  .info-row:last-child { border-bottom: none; }
-  .info-label { color: #94a3b8; }
-  .info-value { color: #e2e8f0; font-family: monospace; font-size: 13px; }
+  .username { font-size: 15px; font-weight: 600; color: #111827; }
+  .balance {
+    font-size: 26px;
+    font-weight: 700;
+    color: #16a34a;
+  }
+  .balance-unit { font-size: 14px; color: #6b7280; margin-left: 3px; }
+  .section-title { font-size: 12px; color: #9ca3af; margin-bottom: 10px; text-transform: uppercase; letter-spacing: 0.5px; }
+  .log-wrap {
+    flex: 1;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
+    padding: 14px 18px;
+    margin-bottom: 12px;
+    min-height: 0;
+  }
+  .log-scroll {
+    overflow-y: auto;
+    flex: 1;
+    min-height: 0;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+  thead th {
+    color: #9ca3af;
+    font-weight: 500;
+    text-align: left;
+    padding: 0 6px 8px 0;
+    border-bottom: 1px solid #f3f4f6;
+    white-space: nowrap;
+  }
+  tbody tr { border-bottom: 1px solid #f9fafb; }
+  tbody tr:last-child { border-bottom: none; }
+  tbody td {
+    padding: 7px 6px 7px 0;
+    color: #374151;
+    vertical-align: middle;
+  }
+  td.model { max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #6b7280; font-size: 12px; }
+  td.quota { color: #111827; font-weight: 500; text-align: right; }
+  .loading { color: #9ca3af; font-style: italic; font-size: 13px; }
+  .error-msg { color: #dc2626; font-size: 13px; }
+  .actions { display: flex; gap: 10px; }
   .btn {
     display: inline-block;
-    padding: 9px 20px;
+    padding: 8px 18px;
     background: #6366f1;
     color: #fff;
     border: none;
@@ -54,78 +95,63 @@
   .btn-danger {
     background: transparent;
     border: 1px solid rgba(239,68,68,0.4);
-    color: #f87171;
+    color: #dc2626;
   }
-  .btn-danger:hover { background: rgba(239,68,68,0.1); }
-  .actions { display: flex; gap: 12px; flex-wrap: wrap; }
-  .loading { color: #64748b; font-style: italic; }
-  .error-msg { color: #f87171; font-size: 13px; margin-top: 8px; }
-  .token-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    word-break: break-all;
-  }
-  .copy-btn {
-    flex-shrink: 0;
-    padding: 4px 10px;
-    background: rgba(255,255,255,0.06);
-    color: #94a3b8;
-    border: 1px solid rgba(255,255,255,0.1);
-    border-radius: 5px;
-    font-size: 12px;
-    cursor: pointer;
-  }
-  .copy-btn:hover { background: rgba(255,255,255,0.1); }
+  .btn-danger:hover { background: rgba(239,68,68,0.06); }
 </style>
 </head>
 <body>
-<h2>账户信息</h2>
-
-<div class="card" id="balance-card">
-  <div class="card-title">余额</div>
-  <div class="loading" id="balance-loading">加载中...</div>
-  <div id="balance-content" style="display:none">
-    <div class="balance" id="balance-value">--</div>
-    <div class="error-msg hidden" id="balance-error"></div>
-  </div>
-</div>
-
-<div class="card" id="info-card">
-  <div class="card-title">账户详情</div>
-  <div class="loading" id="info-loading">加载中...</div>
-  <div id="info-content" style="display:none">
-    <div class="info-row">
-      <span class="info-label">用户名</span>
-      <span class="info-value" id="info-username">--</span>
-    </div>
-    <div class="info-row">
-      <span class="info-label">邮箱</span>
-      <span class="info-value" id="info-email">--</span>
-    </div>
-    <div class="info-row">
-      <span class="info-label">API Token</span>
-      <div class="token-row">
-        <span class="info-value" id="info-token" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:200px">--</span>
-        <button class="copy-btn" onclick="copyToken()">复制</button>
-      </div>
-    </div>
-  </div>
-</div>
+<h2>账户</h2>
 
 <div class="card">
-  <div class="card-title">操作</div>
-  <div class="actions">
-    <button class="btn" id="recharge-btn" onclick="openRecharge()">充值</button>
-    <button class="btn" onclick="loadUserInfo()">刷新</button>
-    <button class="btn btn-danger" onclick="doLogout()">退出登录</button>
+  <div class="user-row">
+    <div>
+      <div class="section-title">用户名</div>
+      <div class="username" id="info-username"><span class="loading">加载中...</span></div>
+    </div>
+    <div style="text-align:right">
+      <div class="section-title">余额</div>
+      <div id="balance-value"><span class="loading">加载中...</span></div>
+    </div>
   </div>
+</div>
+
+<div class="log-wrap">
+  <div class="section-title">消费记录</div>
+  <div id="log-loading" class="loading">加载中...</div>
+  <div id="log-error" class="error-msg" style="display:none"></div>
+  <div class="log-scroll" id="log-scroll" style="display:none">
+    <table>
+      <thead>
+        <tr>
+          <th>时间</th>
+          <th>类型</th>
+          <th>模型</th>
+          <th style="text-align:right">次数</th>
+        </tr>
+      </thead>
+      <tbody id="log-body"></tbody>
+    </table>
+  </div>
+</div>
+
+<div class="actions">
+  <button class="btn" onclick="openRecharge()">充值</button>
+  <button class="btn btn-danger" onclick="doLogout()">退出登录</button>
 </div>
 
 <script>
   let BASE_URL = '';
   let ACCESS_TOKEN = '';
   let USER_ID = 0;
+
+  const TYPE_MAP = { 1: '充值', 2: '消费', 3: '管理员充值', 4: '系统调整' };
+
+  function formatTime(ts) {
+    const d = new Date(ts * 1000);
+    const pad = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
 
   async function init() {
     if (window.electronAPI) {
@@ -134,20 +160,16 @@
       ACCESS_TOKEN = info.accessToken || '';
       USER_ID = info.userId || 0;
     }
-    await loadUserInfo();
+    if (!BASE_URL || !ACCESS_TOKEN) {
+      document.getElementById('info-username').textContent = '未登录';
+      document.getElementById('balance-value').textContent = '未登录';
+      document.getElementById('log-loading').textContent = '未登录';
+      return;
+    }
+    await Promise.all([loadUserInfo(), loadLogs()]);
   }
 
   async function loadUserInfo() {
-    if (!BASE_URL || !ACCESS_TOKEN) {
-      document.getElementById('balance-loading').textContent = '未登录';
-      document.getElementById('info-loading').textContent = '未登录';
-      return;
-    }
-    document.getElementById('balance-loading').style.display = '';
-    document.getElementById('balance-content').style.display = 'none';
-    document.getElementById('info-loading').style.display = '';
-    document.getElementById('info-content').style.display = 'none';
-
     try {
       const resp = await fetch(`${BASE_URL}/api/user/self`, {
         headers: {
@@ -157,38 +179,58 @@
       });
       const data = await resp.json();
       const user = data.data || data;
-
-      document.getElementById('balance-loading').style.display = 'none';
-      document.getElementById('balance-content').style.display = '';
+      document.getElementById('info-username').textContent = user.username || '--';
       const quota = user.quota;
-      const usedQuota = user.used_quota ?? 0;
       if (typeof quota === 'number') {
-        // New-API 以 1/500000 USD 为单位存储余额，显示剩余额度
-        const dollars = ((quota - usedQuota) / 500000).toFixed(4);
+        const count = Math.round(quota / 500000);
         document.getElementById('balance-value').innerHTML =
-          `$${dollars}<span class="balance-unit">USD</span>`;
+          `<span class="balance">${count}<span class="balance-unit">次</span></span>`;
       } else {
         document.getElementById('balance-value').textContent = '暂无数据';
       }
-
-      document.getElementById('info-loading').style.display = 'none';
-      document.getElementById('info-content').style.display = '';
-      document.getElementById('info-username').textContent = user.username || '--';
-      document.getElementById('info-email').textContent = user.email || '未设置';
-      document.getElementById('info-token').textContent = ACCESS_TOKEN;
-      document.getElementById('info-token').title = ACCESS_TOKEN;
-    } catch (err) {
-      document.getElementById('balance-loading').textContent = '加载失败';
-      document.getElementById('info-loading').textContent = '加载失败';
+    } catch {
+      document.getElementById('info-username').textContent = '加载失败';
+      document.getElementById('balance-value').textContent = '加载失败';
     }
   }
 
-  function copyToken() {
-    navigator.clipboard.writeText(ACCESS_TOKEN).then(() => {
-      const btn = document.querySelector('.copy-btn');
-      btn.textContent = '已复制';
-      setTimeout(() => btn.textContent = '复制', 1500);
-    });
+  async function loadLogs() {
+    try {
+      const resp = await fetch(`${BASE_URL}/api/log?p=1&page_size=50`, {
+        headers: {
+          'Authorization': `Bearer ${ACCESS_TOKEN}`,
+          'New-Api-User': String(USER_ID),
+        },
+      });
+      const data = await resp.json();
+      const items = data.data?.items ?? data.data ?? [];
+      document.getElementById('log-loading').style.display = 'none';
+      if (!items.length) {
+        document.getElementById('log-scroll').style.display = '';
+        document.getElementById('log-body').innerHTML =
+          '<tr><td colspan="4" style="color:#9ca3af;text-align:center;padding:20px 0">暂无消费记录</td></tr>';
+        return;
+      }
+      const rows = items.map(item => {
+        const time = item.created_at ? formatTime(item.created_at) : '--';
+        const type = TYPE_MAP[item.type] || `类型${item.type ?? ''}`;
+        const model = item.model_name || '--';
+        const quota = item.quota != null ? Math.round(item.quota / 500000) : '--';
+        return `<tr>
+          <td>${time}</td>
+          <td>${type}</td>
+          <td class="model" title="${model}">${model}</td>
+          <td class="quota">${quota}</td>
+        </tr>`;
+      }).join('');
+      document.getElementById('log-body').innerHTML = rows;
+      document.getElementById('log-scroll').style.display = '';
+    } catch {
+      document.getElementById('log-loading').style.display = 'none';
+      const errEl = document.getElementById('log-error');
+      errEl.textContent = '消费记录加载失败';
+      errEl.style.display = '';
+    }
   }
 
   async function openRecharge() {

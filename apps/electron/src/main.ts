@@ -531,8 +531,8 @@ function registerIpcHandlers(): void {
     const accountHtmlPath = path.join(app.getAppPath(), 'ui', 'account.html');
     const accountWin = new BrowserWindow({
       width: 480,
-      height: 600,
-      backgroundColor: '#0f1117',
+      height: 700,
+      backgroundColor: '#f5f7fa',
       title: 'OpenClaw — 账户',
       webPreferences: { preload: preloadPath, contextIsolation: true },
     });
