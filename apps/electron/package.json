@@ -8,9 +8,9 @@
   "type": "module",
   "scripts": {
     "prebuild": "node scripts/copy-assets.mjs",
-    "dev": "electron .",
-    "build": "npm run prebuild && tsc && electron-builder",
-    "build:nosign": "npm run prebuild && tsc && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder"
+    "dev": "tsc && cp src/preload*.cjs dist/ && electron .",
+    "build": "npm run prebuild && tsc && cp src/preload*.cjs dist/ && electron-builder",
+    "build:nosign": "npm run prebuild && tsc && cp src/preload*.cjs dist/ && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder"
   },
   "dependencies": {},
   "devDependencies": {

@@ -1121,6 +1121,23 @@ export function renderApp(state: AppViewState) {
               })
             : nothing
         }
+
+        ${
+          state.tab === "account"
+            ? html`<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:calc(100vh - 120px);gap:16px;color:#64748b;font-size:14px;">
+                <div>账户页面在独立窗口中打开</div>
+                <button class="btn btn--primary" @click=${() => {
+                  // Open account window via Electron IPC if available
+                  const api = (
+                    window as unknown as { electronAPI?: { openAccountWindow?: () => void } }
+                  ).electronAPI;
+                  if (api?.openAccountWindow) {
+                    api.openAccountWindow();
+                  }
+                }}>打开账户</button>
+              </div>`
+            : nothing
+        }
       </main>
       ${renderExecApprovalPrompt(state)}
       ${renderGatewayUrlConfirmation(state)}

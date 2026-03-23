@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Tray, Menu, nativeImage, dialog } from 'electron';
+import { app, BrowserWindow, Tray, Menu, nativeImage, dialog, ipcMain, protocol, shell, net } from 'electron';
 import path from 'path';
 import os from 'node:os';
 import { fileURLToPath } from 'url';
@@ -6,11 +6,28 @@ import { spawn, spawnSync, type ChildProcess } from 'child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { runFirstTimeSetup } from './first-run.js';
+import { getStoredAuth, saveAuth, clearAuth } from './auth-store.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const PORT = 18789;
+
+// Read New-API base URL from first-run-defaults.json at startup
+function getNewApiBaseUrl(): string {
+  try {
+    const defaultsPath = app.isPackaged
+      ? path.join(process.resourcesPath, 'config', 'first-run-defaults.json')
+      : path.join(app.getAppPath(), 'config', 'first-run-defaults.json');
+    if (fs.existsSync(defaultsPath)) {
+      const defaults = JSON.parse(fs.readFileSync(defaultsPath, 'utf-8'));
+      return ((defaults as { newapi?: { baseUrl?: string } }).newapi?.baseUrl ?? '').replace(/\/+$/, '');
+    }
+  } catch {
+    // ignore
+  }
+  return '';
+}
 
 // Loading screen shown during startup before Gateway is ready
 const LOADING_HTML = `data:text/html;charset=utf-8,${encodeURIComponent(`<!DOCTYPE html>
@@ -47,6 +64,7 @@ const LOADING_HTML = `data:text/html;charset=utf-8,${encodeURIComponent(`<!DOCTY
 
 let gatewayProcess: ChildProcess | null = null;
 let win: BrowserWindow | null = null;
+let authWin: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let isQuitting = false;
 let isManualRetrying = false;
@@ -294,6 +312,234 @@ function spawnGateway(token: string): void {
   });
 }
 
+// Update the apiKey field for the first custom-* provider in openclaw.json
+function updateGatewayApiKey(apiKey: string): void {
+  const configPath = path.join(os.homedir(), '.openclaw', 'openclaw.json');
+  try {
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf-8')) as Record<string, unknown>;
+    const providers = (config?.models as Record<string, unknown>)?.providers as Record<string, Record<string, unknown>> | undefined;
+    if (providers) {
+      for (const key of Object.keys(providers)) {
+        if (key.startsWith('custom-')) {
+          providers[key].apiKey = apiKey;
+          break;
+        }
+      }
+      fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+      console.log('[Electron] Updated Gateway apiKey for provider');
+    }
+  } catch (err) {
+    console.error('[Electron] Failed to update Gateway apiKey:', err);
+  }
+}
+
+// Only write if the stored value differs from what's already in openclaw.json
+function updateGatewayApiKeyIfNeeded(apiKey: string): void {
+  const configPath = path.join(os.homedir(), '.openclaw', 'openclaw.json');
+  try {
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf-8')) as Record<string, unknown>;
+    const providers = (config?.models as Record<string, unknown>)?.providers as Record<string, Record<string, unknown>> | undefined;
+    if (providers) {
+      for (const key of Object.keys(providers)) {
+        if (key.startsWith('custom-') && providers[key].apiKey !== apiKey) {
+          providers[key].apiKey = apiKey;
+          fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+          console.log('[Electron] Synced Gateway apiKey from auth store');
+          break;
+        }
+      }
+    }
+  } catch {
+    // Config file not yet created (before first-run) — ignore
+  }
+}
+
+// Execute full 5-step New-API auth flow in main process using net.fetch (no CORS restrictions)
+async function doNewApiLogin(
+  baseUrl: string, username: string, password: string
+): Promise<{ accessToken: string; userId: number; username: string; apiKey: string }> {
+  console.log('[doNewApiLogin] baseUrl:', baseUrl, 'username:', username);
+
+  // Step 1: Login
+  console.log('[doNewApiLogin] Step 1: POST /api/user/login');
+  const loginResp = await net.fetch(`${baseUrl}/api/user/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password }),
+  });
+  console.log('[doNewApiLogin] Step 1 status:', loginResp.status);
+  const loginData = await loginResp.json() as { success: boolean; message?: string; data?: { id: number; username: string } };
+  console.log('[doNewApiLogin] Step 1 data:', JSON.stringify(loginData));
+  if (!loginResp.ok || !loginData.success) {throw new Error(loginData.message || '登录失败');}
+  const userId = loginData.data!.id;
+  const uname = loginData.data!.username;
+  console.log('[doNewApiLogin] Step 1 OK → userId:', userId, 'username:', uname);
+
+  // Extract session cookie from Step 1 response to pass explicitly in Step 2
+  // net.fetch may not auto-carry cookies between requests in the same session
+  const setCookieHeader = loginResp.headers.get('set-cookie') ?? '';
+  const sessionCookie = setCookieHeader.split(/,(?=[^ ])/u).map(p => {
+    const m = p.trim().match(/^([^=]+)=([^;]*)/);
+    return m ? `${m[1].trim()}=${m[2].trim()}` : '';
+  }).filter(Boolean).join('; ');
+  console.log('[doNewApiLogin] session cookie extracted:', sessionCookie ? 'yes' : 'none');
+
+  // Step 2: access_token — pass cookie explicitly
+  console.log('[doNewApiLogin] Step 2: GET /api/user/token');
+  const tokenResp = await net.fetch(`${baseUrl}/api/user/token`, {
+    headers: { 'New-Api-User': String(userId), ...(sessionCookie ? { 'Cookie': sessionCookie } : {}) },
+  });
+  console.log('[doNewApiLogin] Step 2 status:', tokenResp.status);
+  const tokenRespData = await tokenResp.json() as { data: string };
+  console.log('[doNewApiLogin] Step 2 data:', JSON.stringify(tokenRespData));
+  const accessToken = tokenRespData.data;
+  if (!accessToken) {throw new Error('获取用户凭证失败');}
+  console.log('[doNewApiLogin] Step 2 OK → accessToken prefix:', accessToken.substring(0, 8) + '...');
+
+  // Step 3: AI token list
+  const authHeaders = { 'Authorization': `Bearer ${accessToken}`, 'New-Api-User': String(userId) };
+  console.log('[doNewApiLogin] Step 3: GET /api/token/');
+  const tokensResp = await net.fetch(`${baseUrl}/api/token/`, { headers: authHeaders });
+  console.log('[doNewApiLogin] Step 3 status:', tokensResp.status);
+  const tokensData = await tokensResp.json() as { data?: { items?: Array<{ id: number }> } };
+  console.log('[doNewApiLogin] Step 3 data (truncated):', JSON.stringify(tokensData).substring(0, 200));
+  let items = tokensData.data?.items ?? [];
+  console.log('[doNewApiLogin] Step 3 OK → items count:', items.length);
+
+  // Step 4: create token if none exist
+  if (items.length === 0) {
+    console.log('[doNewApiLogin] Step 4: POST /api/token/ (create)');
+    const createResp = await net.fetch(`${baseUrl}/api/token/`, {
+      method: 'POST',
+      headers: { ...authHeaders, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'default', remain_quota: 0, expired_time: -1, unlimited_quota: true, model_limits_enabled: false }),
+    });
+    console.log('[doNewApiLogin] Step 4 create status:', createResp.status);
+    console.log('[doNewApiLogin] Step 4 create data:', JSON.stringify(await createResp.json()));
+    const newListResp = await net.fetch(`${baseUrl}/api/token/`, { headers: authHeaders });
+    console.log('[doNewApiLogin] Step 4 list status:', newListResp.status);
+    const newListData = await newListResp.json() as { data?: { items?: Array<{ id: number }> } };
+    items = newListData.data?.items ?? [];
+    console.log('[doNewApiLogin] Step 4 OK → items count after create:', items.length);
+  } else {
+    console.log('[doNewApiLogin] Step 4: skipped (tokens exist)');
+  }
+  if (items.length === 0) {throw new Error('无法获取 AI 令牌');}
+
+  // Step 5: get full AI key
+  console.log('[doNewApiLogin] Step 5: POST /api/token/' + items[0].id + '/key');
+  const keyResp = await net.fetch(`${baseUrl}/api/token/${items[0].id}/key`, { method: 'POST', headers: authHeaders });
+  console.log('[doNewApiLogin] Step 5 status:', keyResp.status);
+  const keyData = await keyResp.json() as { data?: { key: string } };
+  console.log('[doNewApiLogin] Step 5 data:', JSON.stringify(keyData));
+  if (!keyData.data?.key) {throw new Error('无法获取 AI 密钥');}
+  const apiKey = 'sk-' + keyData.data.key;
+  console.log('[doNewApiLogin] Step 5 OK → apiKey prefix:', apiKey.substring(0, 12) + '...');
+
+  console.log('[doNewApiLogin] ALL STEPS PASSED');
+  return { accessToken, userId, username: uname, apiKey };
+}
+
+// Show auth window and wait for user to login
+function showAuthWindow(): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const preloadPath = path.join(__dirname, 'preload-auth.cjs');
+    authWin = new BrowserWindow({
+      width: 440,
+      height: 580,
+      resizable: false,
+      show: false,
+      backgroundColor: '#0f1117',
+      title: 'OpenClaw — 登录',
+      webPreferences: { preload: preloadPath, contextIsolation: true },
+    });
+
+    const authHtmlPath = path.join(app.getAppPath(), 'ui', 'auth.html');
+    void authWin.loadFile(authHtmlPath);
+    authWin.once('ready-to-show', () => {
+      authWin?.show();
+    });
+
+    let resolved = false;
+
+    // Override the save-token handler temporarily to capture the token
+    // (the permanent handler is set in registerIpcHandlers, called before this)
+    // We listen on 'auth:token-saved' event emitted by the permanent handler
+    const onTokenSaved = () => {
+      if (resolved) { return; }
+      resolved = true;
+      app.removeListener('auth:token-saved' as never, onTokenSaved as never);
+      if (authWin && !authWin.isDestroyed()) {
+        authWin.close();
+        authWin = null;
+      }
+      resolve();
+    };
+
+    app.on('auth:token-saved' as never, onTokenSaved as never);
+
+    authWin.on('closed', () => {
+      authWin = null;
+      app.removeListener('auth:token-saved' as never, onTokenSaved as never);
+      if (!resolved) {
+        reject(new Error('Auth window closed without login'));
+      }
+    });
+  });
+}
+
+function registerIpcHandlers(): void {
+  const baseUrl = getNewApiBaseUrl();
+
+  ipcMain.handle('auth:get-base-url', () => baseUrl);
+
+  ipcMain.handle('auth:do-login', async (_e, username: string, password: string) => {
+    try {
+      const authData = await doNewApiLogin(baseUrl, username, password);
+      saveAuth(authData);
+      updateGatewayApiKey(authData.apiKey);
+      app.emit('auth:token-saved');
+      return { success: true };
+    } catch (err) {
+      return { success: false, error: (err as Error).message };
+    }
+  });
+
+  ipcMain.handle('auth:save-token', (_e, accessToken: string, userId: number, username: string, apiKey: string) => {
+    saveAuth({ accessToken, userId, username, apiKey });
+    updateGatewayApiKey(apiKey);
+    app.emit('auth:token-saved');
+  });
+
+  ipcMain.handle('account:info', () => {
+    const auth = getStoredAuth();
+    return { accessToken: auth.accessToken ?? '', userId: auth.userId ?? 0, baseUrl };
+  });
+
+  ipcMain.handle('open-external', (_e, url: string) => {
+    void shell.openExternal(url);
+  });
+
+  ipcMain.handle('auth:logout', () => {
+    clearAuth();
+    app.relaunch();
+    app.quit();
+  });
+
+  ipcMain.handle('account:open-window', () => {
+    const preloadPath = path.join(__dirname, 'preload-auth.cjs');
+    const accountHtmlPath = path.join(app.getAppPath(), 'ui', 'account.html');
+    const accountWin = new BrowserWindow({
+      width: 480,
+      height: 600,
+      backgroundColor: '#0f1117',
+      title: 'OpenClaw — 账户',
+      webPreferences: { preload: preloadPath, contextIsolation: true },
+    });
+    void accountWin.loadFile(accountHtmlPath);
+  });
+}
+
 function scheduleGatewayRestart(): void {
   if (gatewayRestartCount >= MAX_GATEWAY_RESTARTS) {
     dialog.showErrorBox('OpenClaw 后台服务异常', '后台服务多次崩溃，请重启应用');
@@ -331,8 +577,29 @@ async function startApp() {
     return;
   }
 
+  // Auth check: if New-API is configured, ensure user has logged in and apiKey is synced
+  const newApiBaseUrl = getNewApiBaseUrl();
+  if (newApiBaseUrl) {
+    const storedAuth = getStoredAuth();
+    if (storedAuth.apiKey) {
+      // Cached credentials: ensure openclaw.json provider apiKey matches stored value
+      updateGatewayApiKeyIfNeeded(storedAuth.apiKey);
+      console.log('[Electron] Using cached auth, apiKey synced to Gateway config');
+    } else {
+      console.log('[Electron] No auth token found, showing auth window');
+      try {
+        await showAuthWindow();
+        console.log('[Electron] Auth completed, continuing startup');
+      } catch (err) {
+        console.error('[Electron] Auth window closed without login:', err);
+        app.quit();
+        return;
+      }
+    }
+  }
+
   // Show loading window immediately so user knows the app is starting
-  const preloadPath = path.join(__dirname, 'preload.js');
+  const preloadPath = path.join(__dirname, 'preload.cjs');
   win = new BrowserWindow({
     width: 1280,
     height: 800,
@@ -396,6 +663,15 @@ async function startApp() {
 
         console.log('[Electron] First-time setup completed');
       }
+    }
+
+    // Sync user apiKey to Gateway config after first-run setup.
+    // On first launch, updateGatewayApiKey() in the login handler fails because
+    // openclaw.json doesn't exist yet. Now that setup has created it, write the key.
+    const postSetupAuth = getStoredAuth();
+    if (postSetupAuth.apiKey) {
+      updateGatewayApiKey(postSetupAuth.apiKey);
+      console.log('[Electron] Synced user apiKey to Gateway config');
     }
 
     // 启动 Gateway 前修复 config（清理无效 key，防止 Gateway 解析失败）
@@ -565,6 +841,18 @@ if (!gotLock) {
       win.focus();
     }
   });
+
+  // Register app:// protocol so local HTML pages can be served from app package
+  void app.whenReady().then(() => {
+    protocol.registerFileProtocol('app', (request, callback) => {
+      const urlPath = decodeURIComponent(request.url.replace('app://', '').split('?')[0]);
+      const filePath = path.join(app.getAppPath(), 'ui', `${urlPath}.html`);
+      callback({ path: filePath });
+    });
+  });
+
+  // Register IPC handlers once
+  registerIpcHandlers();
 
   app.on('ready', startApp);
 

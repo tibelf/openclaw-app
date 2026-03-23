@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>登录 / 注册</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    display: flex; align-items: center; justify-content: center;
+    min-height: 100vh;
+    background: #0f1117;
+    color: #e2e8f0;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 14px;
+  }
+  .card {
+    width: 360px;
+    background: #1a1d27;
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 12px;
+    padding: 32px;
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+  }
+  .logo {
+    text-align: center;
+    font-size: 22px;
+    font-weight: 700;
+    color: #fff;
+    letter-spacing: -0.5px;
+  }
+  .tabs {
+    display: flex;
+    gap: 0;
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .tab-btn {
+    flex: 1;
+    padding: 8px;
+    background: transparent;
+    color: #64748b;
+    border: none;
+    cursor: pointer;
+    font-size: 14px;
+    transition: all 0.15s;
+  }
+  .tab-btn.active {
+    background: #6366f1;
+    color: #fff;
+  }
+  .form { display: flex; flex-direction: column; gap: 14px; }
+  .form-group { display: flex; flex-direction: column; gap: 6px; }
+  label { font-size: 13px; color: #94a3b8; }
+  input {
+    background: #0f1117;
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 6px;
+    color: #e2e8f0;
+    padding: 9px 12px;
+    font-size: 14px;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+  input:focus { border-color: #6366f1; }
+  .btn {
+    padding: 10px;
+    background: #6366f1;
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s;
+    margin-top: 4px;
+  }
+  .btn:hover { background: #4f52d3; }
+  .btn:disabled { background: #374151; cursor: not-allowed; }
+  .msg {
+    font-size: 13px;
+    text-align: center;
+    min-height: 18px;
+    border-radius: 6px;
+    padding: 6px 10px;
+  }
+  .msg.error { color: #f87171; background: rgba(239,68,68,0.1); }
+  .msg.success { color: #34d399; background: rgba(52,211,153,0.1); }
+  .msg.hidden { visibility: hidden; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">OpenClaw</div>
+  <div class="tabs">
+    <button class="tab-btn active" id="tab-login" onclick="switchTab('login')">登录</button>
+    <button class="tab-btn" id="tab-register" onclick="switchTab('register')">注册</button>
+  </div>
+
+  <!-- 登录表单 -->
+  <div id="form-login" class="form">
+    <div class="form-group">
+      <label for="login-username">用户名</label>
+      <input type="text" id="login-username" placeholder="请输入用户名" autocomplete="username">
+    </div>
+    <div class="form-group">
+      <label for="login-password">密码</label>
+      <input type="password" id="login-password" placeholder="请输入密码" autocomplete="current-password">
+    </div>
+    <div class="msg hidden" id="login-msg"></div>
+    <button class="btn" id="login-btn" onclick="doLogin()">登录</button>
+  </div>
+
+  <!-- 注册表单 -->
+  <div id="form-register" class="form" style="display:none">
+    <div class="form-group">
+      <label for="reg-username">用户名</label>
+      <input type="text" id="reg-username" placeholder="请输入用户名">
+    </div>
+    <div class="form-group">
+      <label for="reg-password">密码</label>
+      <input type="password" id="reg-password" placeholder="请设置密码（至少8位）">
+    </div>
+    <div class="form-group">
+      <label for="reg-email">邮箱（可选）</label>
+      <input type="email" id="reg-email" placeholder="可留空">
+    </div>
+    <div class="msg hidden" id="reg-msg"></div>
+    <button class="btn" id="reg-btn" onclick="doRegister()">注册</button>
+  </div>
+</div>
+
+<script>
+  // New-API 地址由 main process 注入
+  let BASE_URL = '';
+  window.addEventListener('DOMContentLoaded', async () => {
+    if (window.electronAPI) {
+      BASE_URL = await window.electronAPI.getNewApiBaseUrl();
+    }
+  });
+
+  function switchTab(tab) {
+    document.getElementById('form-login').style.display = tab === 'login' ? 'flex' : 'none';
+    document.getElementById('form-register').style.display = tab === 'register' ? 'flex' : 'none';
+    document.getElementById('tab-login').classList.toggle('active', tab === 'login');
+    document.getElementById('tab-register').classList.toggle('active', tab === 'register');
+  }
+
+  function showMsg(id, text, type) {
+    const el = document.getElementById(id);
+    el.textContent = text;
+    el.className = 'msg ' + type;
+  }
+
+  async function doLogin() {
+    const username = document.getElementById('login-username').value.trim();
+    const password = document.getElementById('login-password').value;
+    if (!username || !password) {
+      showMsg('login-msg', '请填写用户名和密码', 'error');
+      return;
+    }
+    const btn = document.getElementById('login-btn');
+    btn.disabled = true;
+    btn.textContent = '登录中...';
+    try {
+      showMsg('login-msg', '正在验证...', 'success');
+      const result = await window.electronAPI.doLogin(username, password);
+      if (result.success) {
+        showMsg('login-msg', '登录成功，正在启动...', 'success');
+      } else {
+        showMsg('login-msg', result.error || '登录失败', 'error');
+      }
+    } catch (err) {
+      showMsg('login-msg', '网络错误，请重试', 'error');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '登录';
+    }
+  }
+
+  async function doRegister() {
+    const username = document.getElementById('reg-username').value.trim();
+    const password = document.getElementById('reg-password').value;
+    const email = document.getElementById('reg-email').value.trim();
+    if (!username || !password) {
+      showMsg('reg-msg', '请填写用户名和密码', 'error');
+      return;
+    }
+    if (password.length < 8) {
+      showMsg('reg-msg', '密码至少需要8位', 'error');
+      return;
+    }
+    const btn = document.getElementById('reg-btn');
+    btn.disabled = true;
+    btn.textContent = '注册中...';
+    try {
+      const body = { username, password };
+      if (email) body.email = email;
+      const resp = await fetch(`${BASE_URL}/api/user/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await resp.json();
+      if (!resp.ok || data.success === false) {
+        showMsg('reg-msg', data.message || '注册失败', 'error');
+        return;
+      }
+      showMsg('reg-msg', '注册成功，请登录', 'success');
+      // 自动切换到登录 tab 并填入用户名
+      switchTab('login');
+      document.getElementById('login-username').value = username;
+    } catch (err) {
+      showMsg('reg-msg', '网络错误，请重试', 'error');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '注册';
+    }
+  }
+</script>
+</body>
+</html>

@@ -36,6 +36,7 @@ export const en: TranslationMap = {
     config: "Config",
     debug: "Debug",
     logs: "Logs",
+    account: "Account",
   },
   subtitles: {
     agents: "Manage agent workspaces, tools, and identities.",
@@ -51,6 +52,7 @@ export const en: TranslationMap = {
     config: "Edit ~/.openclaw/openclaw.json safely.",
     debug: "Gateway snapshots, events, and manual RPC calls.",
     logs: "Live tail of the gateway file logs.",
+    account: "View balance and top up.",
   },
   overview: {
     access: {

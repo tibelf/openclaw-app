@@ -1,4 +1,7 @@
 {
+  "newapi": {
+    "baseUrl": "https://your-new-api.example.com"
+  },
   "ai": {
     "provider": "custom",
     "apiKey": "YOUR_API_KEY_HERE",
