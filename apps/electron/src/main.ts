@@ -522,8 +522,14 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle('auth:logout', () => {
     clearAuth();
-    app.relaunch();
-    app.quit();
+    // 直接显示登录窗口，不重启 Gateway（Gateway 仍在运行）
+    void showAuthWindow().then(() => {
+      if (win && !win.isDestroyed()) {
+        void win.loadURL(`http://localhost:${PORT}/#token=${gatewayToken}`);
+      }
+    }).catch(() => {
+      // 用户关闭登录窗口不做处理
+    });
   });
 
   ipcMain.handle('account:open-window', () => {
