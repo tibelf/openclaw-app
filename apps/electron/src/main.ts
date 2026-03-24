@@ -65,6 +65,7 @@ const LOADING_HTML = `data:text/html;charset=utf-8,${encodeURIComponent(`<!DOCTY
 let gatewayProcess: ChildProcess | null = null;
 let win: BrowserWindow | null = null;
 let authWin: BrowserWindow | null = null;
+let accountWin: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let isQuitting = false;
 let isManualRetrying = false;
@@ -522,26 +523,38 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle('auth:logout', () => {
     clearAuth();
-    // 直接显示登录窗口，不重启 Gateway（Gateway 仍在运行）
+    // 关闭账户窗口
+    if (accountWin && !accountWin.isDestroyed()) {
+      accountWin.close();
+      accountWin = null;
+    }
+    // 隐藏主窗口，等待重新登录
+    win?.hide();
     void showAuthWindow().then(() => {
       if (win && !win.isDestroyed()) {
         void win.loadURL(`http://localhost:${PORT}/#token=${gatewayToken}`);
+        win.show();
       }
     }).catch(() => {
-      // 用户关闭登录窗口不做处理
+      // 用户关闭登录窗口未登录，保持主窗口隐藏，activate 时再处理
     });
   });
 
   ipcMain.handle('account:open-window', () => {
+    if (accountWin && !accountWin.isDestroyed()) {
+      accountWin.focus();
+      return;
+    }
     const preloadPath = path.join(__dirname, 'preload-auth.cjs');
     const accountHtmlPath = path.join(app.getAppPath(), 'ui', 'account.html');
-    const accountWin = new BrowserWindow({
+    accountWin = new BrowserWindow({
       width: 480,
       height: 700,
       backgroundColor: '#f5f7fa',
       title: 'OpenClaw — 账户',
       webPreferences: { preload: preloadPath, contextIsolation: true },
     });
+    accountWin.on('closed', () => { accountWin = null; });
     void accountWin.loadFile(accountHtmlPath);
   });
 }
@@ -922,6 +935,16 @@ if (!gotLock) {
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0 && !isQuitting) {
       void startApp();
+    } else if (!getStoredAuth().accessToken && (!authWin || authWin.isDestroyed())) {
+      // 未登录且登录窗口未打开 → 重新显示登录窗口
+      win?.hide();
+      void showAuthWindow().then(() => {
+        if (win && !win.isDestroyed()) {
+          void win.loadURL(`http://localhost:${PORT}/#token=${gatewayToken}`);
+          win.show();
+          win.focus();
+        }
+      }).catch(() => {});
     } else {
       win?.show();
       win?.focus();
